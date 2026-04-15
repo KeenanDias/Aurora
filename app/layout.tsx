@@ -1,5 +1,7 @@
 import type { Metadata } from 'next'
 import { Geist, Geist_Mono } from 'next/font/google'
+import { ClerkProvider } from '@clerk/nextjs'
+import { dark } from '@clerk/themes'
 import { Analytics } from '@vercel/analytics/next'
 import './globals.css'
 
@@ -9,7 +11,6 @@ const _geistMono = Geist_Mono({ subsets: ["latin"] });
 export const metadata: Metadata = {
   title: 'Aurora - AI Financial Coach',
   description: 'From Chaos to Control to Growth. An AI financial coach that helps you spend smarter, stay in control, and build real wealth.',
-  generator: 'v0.app',
   icons: {
     icon: [
       {
@@ -35,11 +36,23 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en">
-      <body className="font-sans antialiased">
-        {children}
-        <Analytics />
-      </body>
-    </html>
+    <ClerkProvider
+      appearance={{
+        baseTheme: dark,
+        variables: {
+          colorPrimary: '#14b8a6',
+          colorBackground: '#0b1120',
+          colorInputBackground: '#111827',
+          colorInputText: '#e2e8f0',
+        },
+      }}
+    >
+      <html lang="en">
+        <body className="font-sans antialiased">
+          {children}
+          <Analytics />
+        </body>
+      </html>
+    </ClerkProvider>
   )
 }

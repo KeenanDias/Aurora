@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "skills": {
+    "clerk": {
+      "source": "clerk/skills",
+      "sourceType": "github",
+      "computedHash": "404a0bfcaa137641b06938effa44dffb27f050af3501f4df574453c6fd9a16ae"
+    },
+    "clerk-backend-api": {
+      "source": "clerk/skills",
+      "sourceType": "github",
+      "computedHash": "c9a9816df4c99a262567264e92144486a54b0a9719251144ebc4c1f684a3dd42"
+    },
+    "clerk-custom-ui": {
+      "source": "clerk/skills",
+      "sourceType": "github",
+      "computedHash": "b45ddd91c4924e8a74cb5272e769b06a5bbbde329983e7e565e6902b1cc80ded"
+    },
+    "clerk-setup": {
+      "source": "clerk/skills",
+      "sourceType": "github",
+      "computedHash": "645b6330424cb2108562852a8d2818bed64484db74aa939476c2f57b63b1da10"
+    }
+  }
+}
