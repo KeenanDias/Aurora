@@ -21,7 +21,7 @@ export async function completeOnboarding(formData: FormData) {
       name,
       job,
       monthly_income: income,
-      onboarded: true,
+      onboarded: false, // Full onboarding happens through Aurora chat (Core 5)
       updated_at: new Date().toISOString(),
     },
     { onConflict: "clerk_user_id" }
