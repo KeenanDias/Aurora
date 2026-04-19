@@ -8,13 +8,26 @@ export default async function DashboardPage() {
   const user = await currentUser()
 
   // Fetch profile to check bank_linked status
-  const { data: profile } = await getSupabase()
+  let profile: Record<string, unknown> | null = null
+  const { data, error } = await getSupabase()
     .from("user_profiles")
-    .select("bank_linked, goal_description, goal_amount, goal_deadline")
+    .select("bank_linked, goal_description, goal_amount, goal_deadline, goal_saved, safety_buffer")
     .eq("clerk_user_id", user?.id ?? "")
     .single()
 
-  const bankLinked = profile?.bank_linked ?? false
+  if (!error) {
+    profile = data
+  } else {
+    // Fallback without goal_saved if column doesn't exist yet
+    const { data: fallback } = await getSupabase()
+      .from("user_profiles")
+      .select("bank_linked, goal_description, goal_amount, goal_deadline, safety_buffer")
+      .eq("clerk_user_id", user?.id ?? "")
+      .single()
+    profile = fallback
+  }
+
+  const bankLinked = (profile?.bank_linked as boolean) ?? false
 
   return (
     <div className="min-h-screen bg-[#0b1120] relative overflow-hidden">
@@ -59,9 +72,11 @@ export default async function DashboardPage() {
 
         <DashboardContent
           bankLinked={bankLinked}
-          goalDescription={profile?.goal_description}
-          goalAmount={profile?.goal_amount}
-          goalDeadline={profile?.goal_deadline}
+          goalDescription={profile?.goal_description as string | undefined}
+          goalAmount={profile?.goal_amount as number | undefined}
+          goalDeadline={profile?.goal_deadline as string | undefined}
+          goalSaved={profile?.goal_saved as number | undefined}
+          safetyBuffer={profile?.safety_buffer as number | undefined}
         />
       </main>
     </div>

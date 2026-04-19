@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
-import { DollarSign, BarChart3, Target, TrendingDown } from "lucide-react"
+import { DollarSign, BarChart3, Target, Wallet, Shield, Info } from "lucide-react"
 
 type Metrics = {
   safeToSpend: {
@@ -12,6 +12,17 @@ type Metrics = {
     daysRemaining: number
     spentThisMonth: number
     isOverBudget: boolean
+    safetyBuffer: number
+    spendableCash: number | null
+    visualSpendableCash: number | null
+    checkingTotal: number
+    creditCardDebt: number
+  }
+  income?: {
+    selfReported: number
+    observed: number
+    used: number
+    usingObserved: boolean
   }
   totalBalance: number
   spentThisMonth: number
@@ -50,6 +61,10 @@ export function DashboardMetrics({ bankLinked }: { bankLinked: boolean }) {
     }
   }, [fetchMetrics])
 
+  const bufferAmount = metrics?.safeToSpend.safetyBuffer ?? 0
+  const visualCash = metrics?.safeToSpend.visualSpendableCash
+  const usingObserved = metrics?.income?.usingObserved ?? false
+
   const cards = [
     {
       icon: DollarSign,
@@ -64,6 +79,19 @@ export function DashboardMetrics({ bankLinked }: { bankLinked: boolean }) {
         : "Connect bank to see",
       gradient: "from-emerald-400 to-emerald-600",
       alert: metrics?.safeToSpend.isOverBudget,
+      incomeAdjusted: usingObserved,
+    },
+    {
+      icon: Wallet,
+      label: "Spendable Cash",
+      value: metrics && visualCash != null
+        ? `$${visualCash.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+        : "—",
+      desc: metrics && visualCash != null
+        ? `After $${bufferAmount} safety buffer`
+        : "Link bank to see",
+      gradient: "from-cyan-400 to-cyan-600",
+      alert: visualCash != null && visualCash < 0,
     },
     {
       icon: BarChart3,
@@ -72,7 +100,7 @@ export function DashboardMetrics({ bankLinked }: { bankLinked: boolean }) {
       desc: metrics
         ? `$${metrics.fixedBills.toFixed(0)} in fixed bills`
         : "No data yet",
-      gradient: "from-cyan-400 to-cyan-600",
+      gradient: "from-orange-400 to-orange-600",
     },
     {
       icon: Target,
@@ -86,16 +114,35 @@ export function DashboardMetrics({ bankLinked }: { bankLinked: boolean }) {
       gradient: "from-violet-400 to-violet-600",
     },
     {
-      icon: TrendingDown,
-      label: "Account Balance",
-      value: metrics ? `$${metrics.totalBalance.toFixed(0)}` : "—",
-      desc: metrics ? "Across linked accounts" : "Link bank to see",
-      gradient: "from-teal-400 to-teal-600",
+      icon: Shield,
+      label: "Safety Buffer",
+      value: metrics
+        ? `$${bufferAmount.toLocaleString()}`
+        : "—",
+      desc: metrics
+        ? bufferAmount > 0
+          ? "Protected — don't touch this"
+          : "No buffer set — chat with Aurora to add one"
+        : "Set via Aurora chat",
+      gradient: "from-indigo-400 to-violet-600",
     },
   ]
 
   return (
-    <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+    <div className="space-y-4 mb-8">
+      {/* Income adjustment notice */}
+      {usingObserved && metrics?.income && (
+        <div className="rounded-xl border border-teal-500/20 bg-teal-500/[0.04] p-4 flex items-center gap-3">
+          <div className="w-8 h-8 bg-gradient-to-br from-emerald-400 to-teal-500 rounded-lg flex items-center justify-center shrink-0">
+            <span className="text-white text-sm font-bold">A</span>
+          </div>
+          <p className="text-sm text-white/60">
+            Hey! I noticed your bank shows more deposits than the ${metrics.income.selfReported.toLocaleString()} we talked about, so I&apos;ve adjusted your Safe-to-Spend to keep things accurate based on your real cash flow.
+          </p>
+        </div>
+      )}
+
+      <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-4">
       {cards.map((card) => (
         <div
           key={card.label}
@@ -114,6 +161,14 @@ export function DashboardMetrics({ bankLinked }: { bankLinked: boolean }) {
             <span className="text-xs text-white/40 font-medium">
               {card.label}
             </span>
+            {card.incomeAdjusted && (
+              <span className="relative group">
+                <Info className="w-3.5 h-3.5 text-teal-400/60 cursor-help" />
+                <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2.5 py-1.5 rounded-lg bg-[#1a2235] border border-white/10 text-[10px] text-white/70 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                  Based on recent bank activity
+                </span>
+              </span>
+            )}
           </div>
           <p
             className={`text-2xl font-bold mb-1 ${
@@ -125,6 +180,7 @@ export function DashboardMetrics({ bankLinked }: { bankLinked: boolean }) {
           <p className="text-xs text-white/30">{card.desc}</p>
         </div>
       ))}
+      </div>
     </div>
   )
 }

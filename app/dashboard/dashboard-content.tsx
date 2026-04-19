@@ -10,17 +10,23 @@ export function DashboardContent({
   goalDescription,
   goalAmount,
   goalDeadline,
+  goalSaved,
+  safetyBuffer: initialBuffer,
 }: {
   bankLinked: boolean
   goalDescription?: string
   goalAmount?: number
   goalDeadline?: string
+  goalSaved?: number
+  safetyBuffer?: number
 }) {
   const [goal, setGoal] = useState({
     description: goalDescription,
     amount: goalAmount,
     deadline: goalDeadline,
+    saved: goalSaved ?? 0,
   })
+  const [safetyBuffer, setSafetyBuffer] = useState(initialBuffer ?? 0)
 
   // Refetch profile when Aurora updates it via chat
   useEffect(() => {
@@ -33,7 +39,9 @@ export function DashboardContent({
             description: data.goal_description,
             amount: data.goal_amount,
             deadline: data.goal_deadline,
+            saved: data.goal_saved ?? 0,
           })
+          setSafetyBuffer(data.safety_buffer ?? 0)
         }
       } catch {
         // silent fail
@@ -65,24 +73,39 @@ export function DashboardContent({
       <DashboardMetrics bankLinked={initialBankLinked} />
 
       {/* Goal progress (if set) */}
-      {goalAmount && goalDeadline && (
-        <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-5 mb-8">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-sm font-medium text-white/60">
-              {goalDescription || "Savings Goal"}
-            </p>
-            <p className="text-xs text-white/30">
-              by {new Date(goalDeadline).toLocaleDateString("en-US", { month: "short", year: "numeric" })}
+      {goal.amount && goal.deadline && (() => {
+        const progress = Math.min(100, Math.round((goal.saved / goal.amount) * 100))
+        return (
+          <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-5 mb-8">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-sm font-medium text-white/60">
+                {goal.description || "Savings Goal"}
+              </p>
+              <p className="text-xs text-white/30">
+                by {new Date(goal.deadline).toLocaleDateString("en-US", { month: "short", year: "numeric" })}
+              </p>
+            </div>
+            <div className="w-full h-2 bg-white/[0.06] rounded-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 rounded-full transition-all"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            <p className="text-xs text-white/30 mt-2">
+              ${goal.saved.toLocaleString()} of ${goal.amount.toLocaleString()} saved — {progress}%
             </p>
           </div>
-          <div className="w-full h-2 bg-white/[0.06] rounded-full overflow-hidden">
-            <div
-              className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 rounded-full transition-all"
-              style={{ width: "0%" }}
-            />
+        )
+      })()}
+
+      {/* Safety buffer persona message */}
+      {initialBankLinked && safetyBuffer > 0 && (
+        <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/[0.04] p-4 mb-8 flex items-center gap-3">
+          <div className="w-8 h-8 bg-gradient-to-br from-indigo-400 to-violet-500 rounded-lg flex items-center justify-center shrink-0">
+            <span className="text-white text-sm font-bold">A</span>
           </div>
-          <p className="text-xs text-white/30 mt-2">
-            ${goalAmount.toLocaleString()} target — connect bank to track progress
+          <p className="text-sm text-white/60">
+            Your safety buffer is holding strong — nice work keeping that shield up!
           </p>
         </div>
       )}

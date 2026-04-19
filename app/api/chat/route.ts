@@ -37,6 +37,9 @@ When chatting with a NEW user (no profile data yet), your job is to naturally co
 4. **Goal** — A specific financial goal with an amount and deadline (e.g., "Save $5,000 for a PC by December 2026")
 5. **Safety Buffer** — Whether they want a daily untouchable buffer amount
 
+## Tracking Goal Progress
+When a user tells you they've saved money toward their goal (e.g., "I saved $200", "I put aside $500"), immediately update goal_saved with the NEW TOTAL. If they currently have $200 saved and say "I saved another $100", set goal_saved to 300. Always confirm the update and encourage them — this is a celebration moment!
+
 IMPORTANT: As soon as the user reveals ANY of these details in conversation, immediately call the save_profile_data function to store it. Do NOT wait until you have all 5 — save each piece as you learn it.
 
 Start by warmly greeting them and asking their name. Then naturally flow through the rest. Don't rush — one or two questions per message max.
@@ -61,20 +64,20 @@ When asking about the buffer, offer two choices:
 
 ## Kind Reality Check (Math Gap Logic)
 When a user sets a goal, ALWAYS do the math silently:
-- Calculate: months_remaining = months between TODAY (April 2026) and the goal deadline
+- Calculate: months_remaining = months between TODAY's date and the goal deadline
 - Calculate: required_monthly = goal_amount / months_remaining
 - Calculate: available = monthly_income - safety_buffer (and subtract 25% if tax_withholding is true)
 
 If required_monthly > available (the goal requires more than they can realistically save):
-1. **Acknowledge the goal with genuine excitement:** "That's a sick goal — a $5k PC is going to be a beast!"
-2. **Show the math transparently:** "To hit that by December 2026, we're looking at about $625/month."
-3. **Identify the gap without judgment:** "Since your average is $400/month, the math is a bit tight right now."
+1. **Acknowledge the goal with genuine excitement** — show you're genuinely hyped about what they want
+2. **Show the math transparently** — break down exactly how much per month it would take to hit their target by their deadline
+3. **Identify the gap without judgment** — compare the required monthly savings to their available income, framing it as "the math is tight" rather than "you can't afford it"
 4. **Offer 3 solutions — let THEM choose:**
-   - Extend the deadline: "If we push it to [realistic date], that drops to $X/month — way more doable"
-   - Adjust the amount: "Or we could aim for $X first and upgrade later"
-   - Account for income spikes: "Are you expecting any bigger months coming up? Commissions, seasonal work, etc.?"
+   - Extend the deadline: suggest a realistic date that brings the monthly amount down to something comfortable
+   - Adjust the amount: propose a smaller initial target they can hit first, with room to grow later
+   - Account for income spikes: ask if they expect any bigger months ahead (bonuses, seasonal work, side gigs, etc.)
 
-If required_monthly <= available: celebrate it! "The math checks out — you can totally do this."
+If required_monthly <= available: celebrate it! Confirm the math works and hype them up.
 
 ## Phase 2: Data Hand-off
 ONLY after you've collected all Core 5 items, say something like:
@@ -215,6 +218,10 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
             enum: ["individual", "shared"],
             description: "Whether the Safe-to-Spend is for the individual or a shared household",
           },
+          goal_saved: {
+            type: "number",
+            description: "The amount the user has saved toward their goal so far. Update this when the user reports saving money toward their goal.",
+          },
         },
         required: [],
         additionalProperties: false,
@@ -246,6 +253,7 @@ async function executeSaveProfile(
   if (args.income_calc_method) update.income_calc_method = args.income_calc_method
   if (typeof args.tax_withholding === "boolean") update.tax_withholding = args.tax_withholding
   if (args.household_type) update.household_type = args.household_type
+  if (typeof args.goal_saved === "number") update.goal_saved = args.goal_saved
 
   // Check if all Core 5 are collected to mark onboarded
   const { data: existing } = await getSupabase()
