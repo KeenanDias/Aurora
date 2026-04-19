@@ -341,6 +341,9 @@ Pick up where you left off. Don't re-ask what you already know.`
 
   let response = completion.choices[0].message
 
+  // Track whether profile was updated so the frontend can refresh the dashboard
+  let profileUpdated = false
+
   // Handle tool calls in a loop (Aurora may call save_profile_data)
   const allMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "system", content: systemPrompt },
@@ -354,6 +357,7 @@ Pick up where you left off. Don't re-ask what you already know.`
       if (toolCall.function.name === "save_profile_data") {
         const args = JSON.parse(toolCall.function.arguments)
         const result = await executeSaveProfile(userId, args)
+        if (result.success) profileUpdated = true
 
         allMessages.push({
           role: "tool",
@@ -374,5 +378,5 @@ Pick up where you left off. Don't re-ask what you already know.`
     allMessages.push(response)
   }
 
-  return NextResponse.json({ message: response.content })
+  return NextResponse.json({ message: response.content, profileUpdated })
 }

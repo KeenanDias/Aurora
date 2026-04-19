@@ -35,7 +35,7 @@ export function ChatBot() {
   const [welcomeLoaded, setWelcomeLoaded] = useState(false)
   const [size, setSize] = useState(DEFAULT_SIZE)
 
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const scrollAreaRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const openRef = useRef(open)
   const resizeRef = useRef<{ startX: number; startY: number; startW: number; startH: number } | null>(null)
@@ -74,8 +74,16 @@ export function ChatBot() {
     loadWelcome()
   }, [])
 
+  // Auto-scroll: find the Radix scroll viewport and scroll it to bottom
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" })
+    const el = scrollAreaRef.current
+    if (!el) return
+    const viewport = el.querySelector("[data-slot='scroll-area-viewport']") as HTMLElement | null
+    if (viewport) {
+      requestAnimationFrame(() => {
+        viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" })
+      })
+    }
   }, [messages, isLoading])
 
   // Reset window size and position every time it opens
@@ -128,6 +136,10 @@ export function ChatBot() {
 
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Failed to get response")
+
+      if (data.profileUpdated) {
+        window.dispatchEvent(new Event("aurora-profile-updated"))
+      }
 
       addMessage({
         id: (Date.now() + 1).toString(),
@@ -277,7 +289,7 @@ export function ChatBot() {
             </div>
 
             {/* Messages */}
-            <ScrollArea className="flex-1 overflow-hidden">
+            <ScrollArea ref={scrollAreaRef} className="flex-1 overflow-hidden">
               <div className="p-4 space-y-5">
                 {!welcomeLoaded ? (
                   <div className="flex gap-3">
@@ -379,7 +391,7 @@ export function ChatBot() {
                     </div>
                   </div>
                 )}
-                <div ref={bottomRef} />
+                <div />
               </div>
             </ScrollArea>
 

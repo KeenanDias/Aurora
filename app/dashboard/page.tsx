@@ -1,10 +1,20 @@
 import { UserButton } from "@clerk/nextjs"
 import { currentUser } from "@clerk/nextjs/server"
-import { DollarSign, BarChart3, Target, MessageSquare, ArrowRight } from "lucide-react"
 import Link from "next/link"
+import { getSupabase } from "@/lib/supabase"
+import { DashboardContent } from "./dashboard-content"
 
 export default async function DashboardPage() {
   const user = await currentUser()
+
+  // Fetch profile to check bank_linked status
+  const { data: profile } = await getSupabase()
+    .from("user_profiles")
+    .select("bank_linked, goal_description, goal_amount, goal_deadline")
+    .eq("clerk_user_id", user?.id ?? "")
+    .single()
+
+  const bankLinked = profile?.bank_linked ?? false
 
   return (
     <div className="min-h-screen bg-[#0b1120] relative overflow-hidden">
@@ -47,46 +57,12 @@ export default async function DashboardPage() {
           <p className="text-white/40">Here&apos;s how your finances are looking today.</p>
         </div>
 
-        {/* Placeholder cards */}
-        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-          {[
-            { icon: DollarSign, label: "Safe to Spend", value: "—", color: "emerald", desc: "Connect bank to see" },
-            { icon: BarChart3, label: "Monthly Spending", value: "—", color: "cyan", desc: "No data yet" },
-            { icon: Target, label: "Goals", value: "0", color: "violet", desc: "Set your first goal" },
-            { icon: MessageSquare, label: "Nudges Today", value: "0", color: "teal", desc: "Coming soon" },
-          ].map((card) => (
-            <div
-              key={card.label}
-              className={`p-5 rounded-xl border border-white/[0.06] bg-white/[0.02]`}
-            >
-              <div className="flex items-center gap-2 mb-3">
-                <div className={`w-8 h-8 bg-gradient-to-br from-${card.color}-400 to-${card.color}-600 rounded-lg flex items-center justify-center`}>
-                  <card.icon className="w-4 h-4 text-white" />
-                </div>
-                <span className="text-xs text-white/40 font-medium">{card.label}</span>
-              </div>
-              <p className="text-2xl font-bold text-white mb-1">{card.value}</p>
-              <p className="text-xs text-white/30">{card.desc}</p>
-            </div>
-          ))}
-        </div>
-
-        {/* Getting started card */}
-        <div className="rounded-2xl border border-white/[0.06] bg-gradient-to-br from-emerald-500/[0.04] via-teal-500/[0.03] to-violet-500/[0.04] p-8">
-          <h2 className="text-xl font-bold text-white mb-2">Get Started with Aurora</h2>
-          <p className="text-white/40 mb-6 max-w-lg">
-            Connect your bank account to unlock personalized AI coaching, safe-to-spend tracking, and predictive nudges.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-3">
-            <button className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-white font-medium text-sm shadow-lg shadow-teal-500/20 hover:from-emerald-400 hover:via-teal-400 hover:to-cyan-400 transition-all">
-              Connect Your Bank
-              <ArrowRight className="w-4 h-4" />
-            </button>
-            <button className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full border border-white/10 text-white/60 font-medium text-sm hover:bg-white/[0.04] transition-all">
-              Take a Tour
-            </button>
-          </div>
-        </div>
+        <DashboardContent
+          bankLinked={bankLinked}
+          goalDescription={profile?.goal_description}
+          goalAmount={profile?.goal_amount}
+          goalDeadline={profile?.goal_deadline}
+        />
       </main>
     </div>
   )
