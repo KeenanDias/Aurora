@@ -53,6 +53,15 @@ export function DashboardMetrics({ bankLinked }: { bankLinked: boolean }) {
     fetchMetrics()
   }, [fetchMetrics])
 
+  // Auto-poll every 60 seconds to catch new spending (coffee, gas, groceries, etc.)
+  useEffect(() => {
+    if (!bankLinked) return
+    const interval = setInterval(() => {
+      fetchMetrics()
+    }, 60_000)
+    return () => clearInterval(interval)
+  }, [bankLinked, fetchMetrics])
+
   // Expose refresh for parent components
   useEffect(() => {
     if (typeof window !== "undefined") {

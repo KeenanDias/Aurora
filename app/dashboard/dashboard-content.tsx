@@ -27,6 +27,7 @@ export function DashboardContent({
     saved: goalSaved ?? 0,
   })
   const [safetyBuffer, setSafetyBuffer] = useState(initialBuffer ?? 0)
+  const [bankLinked, setBankLinked] = useState(initialBankLinked)
 
   // Refetch profile when Aurora updates it via chat
   useEffect(() => {
@@ -42,6 +43,7 @@ export function DashboardContent({
             saved: data.goal_saved ?? 0,
           })
           setSafetyBuffer(data.safety_buffer ?? 0)
+          if (data.bank_linked !== undefined) setBankLinked(data.bank_linked)
         }
       } catch {
         // silent fail
@@ -70,7 +72,7 @@ export function DashboardContent({
   return (
     <>
       {/* Metrics cards */}
-      <DashboardMetrics bankLinked={initialBankLinked} />
+      <DashboardMetrics bankLinked={bankLinked} />
 
       {/* Goal progress (if set) */}
       {goal.amount && goal.deadline && (() => {
@@ -99,7 +101,7 @@ export function DashboardContent({
       })()}
 
       {/* Safety buffer persona message */}
-      {initialBankLinked && safetyBuffer > 0 && (
+      {bankLinked && safetyBuffer > 0 && (
         <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/[0.04] p-4 mb-8 flex items-center gap-3">
           <div className="w-8 h-8 bg-gradient-to-br from-indigo-400 to-violet-500 rounded-lg flex items-center justify-center shrink-0">
             <span className="text-white text-sm font-bold">A</span>
@@ -111,7 +113,7 @@ export function DashboardContent({
       )}
 
       {/* Getting started / Bank connection card */}
-      {!initialBankLinked ? (
+      {!bankLinked ? (
         <div className="rounded-2xl border border-white/[0.06] bg-gradient-to-br from-emerald-500/[0.04] via-teal-500/[0.03] to-violet-500/[0.04] p-8">
           <h2 className="text-xl font-bold text-white mb-2">
             Connect Your Bank

@@ -2,6 +2,9 @@ import { auth } from "@clerk/nextjs/server"
 import { NextRequest, NextResponse } from "next/server"
 import OpenAI from "openai"
 import { getSupabase } from "@/lib/supabase"
+import { plaidClient } from "@/lib/plaid"
+import { calculateSafeToSpend } from "@/lib/safe-to-spend"
+import type { AccountBalance } from "@/lib/safe-to-spend"
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
@@ -101,9 +104,11 @@ When a user is already onboarded (profile data exists), DO NOT re-ask discovery 
 - NEVER re-ask for name, job, or income they already provided
 
 **Daily Safe-to-Spend Calculation:**
-Safe-to-Spend = (Monthly Income - Goal Savings - Buffer) / days remaining in month
+If the user has linked their bank, live metrics are injected below in the "Live Dashboard Metrics" section — ALWAYS use those numbers directly. Do NOT recalculate manually. The dashboard and chatbot must show the same number.
 
-If the user has NOT linked their bank AND has NOT uploaded statements, you need to understand their lifestyle spending to make Safe-to-Spend accurate. Ask these naturally (not all at once):
+If the user has NOT linked their bank AND has NOT uploaded statements, calculate manually:
+Safe-to-Spend = (Monthly Income - Goal Savings - Buffer) / days remaining in month
+You also need to understand their lifestyle spending to make Safe-to-Spend accurate. Ask these naturally (not all at once):
 - "How often do you eat out or order food? Roughly how much per week?"
 - "Do you have any regular activities — gym, streaming, going out with friends?"
 - "How about shopping — clothes, tech, random Amazon stuff? Ballpark per month?"
@@ -272,11 +277,120 @@ async function executeSaveProfile(
     .upsert(update, { onConflict: "clerk_user_id" })
 
   if (error) {
+    // If goal_saved column doesn't exist yet, retry without it
+    if (error.message?.includes("goal_saved") && update.goal_saved !== undefined) {
+      console.warn("goal_saved column missing, retrying without it")
+      const fallbackUpdate = { ...update }
+      delete fallbackUpdate.goal_saved
+      const { error: retryError } = await getSupabase()
+        .from("user_profiles")
+        .upsert(fallbackUpdate, { onConflict: "clerk_user_id" })
+      if (retryError) {
+        console.error("Supabase save error (retry):", retryError)
+        return { success: false, error: retryError.message }
+      }
+      return { success: true, goal_saved_skipped: true }
+    }
     console.error("Supabase save error:", error)
     return { success: false, error: error.message }
   }
 
   return { success: true }
+}
+
+// ── Fetch live metrics from Plaid ──────────────────────────────────────────
+const IGNORED_SPENDING = new Set(["TRANSFER_IN", "TRANSFER_OUT", "CREDIT_CARD", "LOAN_PAYMENTS"])
+const IGNORED_INCOME = new Set(["TRANSFER_OUT", "CREDIT_CARD"])
+
+async function fetchLiveMetrics(profile: Record<string, unknown>) {
+  try {
+    const accessToken = profile.plaid_access_token as string
+    const now = new Date()
+    const thirtyDaysAgo = new Date(now)
+    thirtyDaysAgo.setDate(now.getDate() - 30)
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
+
+    const res = await plaidClient.transactionsGet({
+      access_token: accessToken,
+      start_date: thirtyDaysAgo.toISOString().split("T")[0],
+      end_date: now.toISOString().split("T")[0],
+      options: { count: 500, offset: 0 },
+    })
+
+    const { accounts, transactions } = res.data
+
+    const accountBalances: AccountBalance[] = accounts.map((a) => ({
+      type: a.type as AccountBalance["type"],
+      subtype: a.subtype,
+      currentBalance: a.balances.current ?? 0,
+      availableBalance: a.balances.available ?? null,
+    }))
+
+    const spendingAccountIds = new Set(
+      accounts.filter((a) => a.type === "depository" || a.type === "credit").map((a) => a.account_id)
+    )
+
+    const thisMonth = transactions.filter((t) => {
+      const d = new Date(t.date)
+      return d >= startOfMonth && d <= now && spendingAccountIds.has(t.account_id)
+    })
+
+    const realSpending = thisMonth.filter((t) => {
+      const cat = t.personal_finance_category?.primary ?? ""
+      return t.amount > 0 && !IGNORED_SPENDING.has(cat)
+    })
+
+    const totalSpent = realSpending.reduce((s, t) => s + t.amount, 0)
+
+    const depositIds = new Set(accounts.filter((a) => a.type === "depository").map((a) => a.account_id))
+    const observedIncome = transactions
+      .filter((t) => {
+        const cat = t.personal_finance_category?.primary ?? ""
+        return t.amount < 0 && depositIds.has(t.account_id) && !IGNORED_INCOME.has(cat)
+      })
+      .reduce((s, t) => s + Math.abs(t.amount), 0)
+
+    const selfReported = (profile.monthly_income as number) ?? 0
+    const incomeUsed = Math.max(selfReported, observedIncome, totalSpent * 1.5)
+
+    const fixedBills = realSpending
+      .filter((t) =>
+        t.personal_finance_category?.primary === "RENT_AND_UTILITIES" ||
+        t.category?.includes("Rent") ||
+        t.category?.includes("Utilities") ||
+        t.category?.includes("Insurance")
+      )
+      .reduce((s, t) => s + t.amount, 0)
+
+    const discretionary = totalSpent - fixedBills
+
+    const sts = calculateSafeToSpend({
+      monthlyIncome: incomeUsed,
+      fixedBills,
+      goalAmount: profile.goal_amount as number | null,
+      goalDeadline: profile.goal_deadline as string | null,
+      safetyBuffer: (profile.safety_buffer as number) ?? 0,
+      spentThisMonth: discretionary,
+      taxWithholding: (profile.tax_withholding as boolean) ?? false,
+      accounts: accountBalances,
+    })
+
+    return {
+      dailySafeToSpend: sts.dailySafeToSpend,
+      remainingBudget: sts.remainingBudget,
+      monthlyAvailable: sts.monthlyAvailable,
+      daysRemaining: sts.daysRemaining,
+      spentThisMonth: Math.round(totalSpent * 100) / 100,
+      fixedBills: Math.round(fixedBills * 100) / 100,
+      incomeUsed: Math.round(incomeUsed * 100) / 100,
+      spendableCash: sts.visualSpendableCash,
+      safetyBuffer: sts.safetyBuffer,
+      monthlySavingsGoal: sts.monthlySavingsGoal,
+    }
+  } catch (e) {
+    console.error("Failed to fetch live metrics for chat:", e)
+    return null
+  }
 }
 
 // ── POST handler ───────────────────────────────────────────────────────────
@@ -307,16 +421,36 @@ export async function POST(req: NextRequest) {
       ? "Bank linked — use transaction data for Safe-to-Spend. No need to ask about lifestyle spending."
       : "NO bank linked, NO statements uploaded — you MUST ask about lifestyle spending (eating out, activities, shopping, subscriptions) to calculate an accurate daily Safe-to-Spend. Ask naturally over the conversation, not all at once."
 
+    // Fetch live metrics from Plaid when bank is linked
+    let metricsBlock = ""
+    if (profile.bank_linked && profile.plaid_access_token) {
+      const metrics = await fetchLiveMetrics(profile)
+      if (metrics) {
+        metricsBlock = `\n\n## Live Dashboard Metrics (from Plaid — USE THESE NUMBERS, do NOT calculate manually)
+- **Daily Safe-to-Spend: $${metrics.dailySafeToSpend}**
+- Remaining budget this month: $${metrics.remainingBudget}
+- Monthly income used (adjusted): $${metrics.incomeUsed}
+- Spent this month: $${metrics.spentThisMonth}
+- Fixed bills: $${metrics.fixedBills}
+- Monthly goal savings: $${metrics.monthlySavingsGoal}
+- Safety buffer: $${metrics.safetyBuffer}
+- Spendable cash: ${metrics.spendableCash != null ? "$" + metrics.spendableCash : "N/A"}
+- Days remaining: ${metrics.daysRemaining}
+
+CRITICAL: When the user asks about Safe-to-Spend, spending, or budget — ALWAYS use these live numbers. NEVER recalculate from the self-reported income. These numbers already account for observed income, fixed bills, goals, buffer, and actual spending.`
+      }
+    }
+
     systemPrompt += `\n\n## Current User Profile (already onboarded — skip discovery, go straight to coaching)
 - Name: ${profile.name}
 - Job: ${profile.job} (${profile.income_type ?? "unknown"} income)
-- Monthly income: $${profile.monthly_income?.toLocaleString() ?? "unknown"}
-- Goal: ${profile.goal_description ?? "not set"} — $${profile.goal_amount?.toLocaleString() ?? "?"} by ${profile.goal_deadline ?? "no deadline"}
+- Monthly income (self-reported): $${profile.monthly_income?.toLocaleString() ?? "unknown"}
+- Goal: ${profile.goal_description ?? "not set"} — $${profile.goal_amount?.toLocaleString() ?? "?"} by ${profile.goal_deadline ?? "no deadline"} (saved: $${profile.goal_saved ?? 0})
 - Safety buffer: $${profile.safety_buffer ?? 0} (${profile.buffer_type ?? "flat_monthly"})
 - Income calculation: ${profile.income_calc_method ?? "average"} month
 - Tax withholding: ${profile.tax_withholding ? "yes (25%)" : "no"}
 - Household: ${profile.household_type ?? "individual"}
-- Bank status: ${bankStatus}
+- Bank status: ${bankStatus}${metricsBlock}
 
 IMPORTANT: This user is already onboarded. Do NOT re-ask their name, job, income, goal, or buffer. Greet them by name and jump into coaching. Use their name occasionally to keep it personal.`
   } else if (profile) {

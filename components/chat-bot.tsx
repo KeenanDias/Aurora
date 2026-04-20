@@ -141,6 +141,12 @@ export function ChatBot() {
         window.dispatchEvent(new Event("aurora-profile-updated"))
       }
 
+      // Always refresh dashboard metrics after any chat response
+      // (spending may have changed since last fetch)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const refresh = (window as any).__refreshDashboardMetrics
+      if (typeof refresh === "function") refresh()
+
       addMessage({
         id: (Date.now() + 1).toString(),
         role: "assistant",
