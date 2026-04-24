@@ -29,12 +29,12 @@ type Metrics = {
   fixedBills: number
 } | null
 
-export function DashboardMetrics({ bankLinked }: { bankLinked: boolean }) {
+export function DashboardMetrics({ bankLinked, hasVaultData }: { bankLinked: boolean; hasVaultData?: boolean }) {
   const [metrics, setMetrics] = useState<Metrics>(null)
   const [loading, setLoading] = useState(false)
 
   const fetchMetrics = useCallback(async () => {
-    if (!bankLinked) return
+    if (!bankLinked && !hasVaultData) return
     setLoading(true)
     try {
       const res = await fetch("/api/plaid/sync-transactions")
@@ -47,7 +47,7 @@ export function DashboardMetrics({ bankLinked }: { bankLinked: boolean }) {
     } finally {
       setLoading(false)
     }
-  }, [bankLinked])
+  }, [bankLinked, hasVaultData])
 
   useEffect(() => {
     fetchMetrics()
@@ -55,12 +55,12 @@ export function DashboardMetrics({ bankLinked }: { bankLinked: boolean }) {
 
   // Auto-poll every 60 seconds to catch new spending (coffee, gas, groceries, etc.)
   useEffect(() => {
-    if (!bankLinked) return
+    if (!bankLinked && !hasVaultData) return
     const interval = setInterval(() => {
       fetchMetrics()
     }, 60_000)
     return () => clearInterval(interval)
-  }, [bankLinked, fetchMetrics])
+  }, [bankLinked, hasVaultData, fetchMetrics])
 
   // Expose refresh for parent components
   useEffect(() => {
@@ -83,7 +83,7 @@ export function DashboardMetrics({ bankLinked }: { bankLinked: boolean }) {
         : "—",
       desc: metrics
         ? `$${metrics.safeToSpend.remainingBudget.toFixed(0)} left this month`
-        : bankLinked
+        : (bankLinked || hasVaultData)
         ? "Loading..."
         : "Connect bank to see",
       gradient: "from-emerald-400 to-emerald-600",

@@ -417,13 +417,11 @@ export async function POST(req: NextRequest) {
   let systemPrompt = AURORA_SYSTEM_PROMPT.replace("{{CURRENT_DATE}}", currentDate)
 
   if (profile && profile.onboarded) {
-    const bankStatus = profile.bank_linked
-      ? "Bank linked — use transaction data for Safe-to-Spend. No need to ask about lifestyle spending."
-      : "NO bank linked, NO statements uploaded — you MUST ask about lifestyle spending (eating out, activities, shopping, subscriptions) to calculate an accurate daily Safe-to-Spend. Ask naturally over the conversation, not all at once."
-
-    // Fetch live metrics from Plaid when bank is linked
+    let bankStatus = ""
     let metricsBlock = ""
+
     if (profile.bank_linked && profile.plaid_access_token) {
+      bankStatus = "Bank linked — use transaction data for Safe-to-Spend. No need to ask about lifestyle spending."
       const metrics = await fetchLiveMetrics(profile)
       if (metrics) {
         metricsBlock = `\n\n## Live Dashboard Metrics (from Plaid — USE THESE NUMBERS, do NOT calculate manually)
@@ -438,6 +436,33 @@ export async function POST(req: NextRequest) {
 - Days remaining: ${metrics.daysRemaining}
 
 CRITICAL: When the user asks about Safe-to-Spend, spending, or budget — ALWAYS use these live numbers. NEVER recalculate from the self-reported income. These numbers already account for observed income, fixed bills, goals, buffer, and actual spending.`
+      }
+    } else {
+      // Check for vault statement data
+      const { data: latestVault } = await getSupabase()
+        .from("vault_uploads")
+        .select("total_income, total_spending, fixed_bills, closing_balance, period_start, period_end, filename")
+        .eq("clerk_user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .single()
+
+      if (latestVault) {
+        bankStatus = "No bank linked, but user has uploaded a bank statement. Use the statement data below for financial coaching."
+        const balanceInfo = latestVault.closing_balance != null
+          ? `\n- **Account closing balance:** $${latestVault.closing_balance}`
+          : ""
+        metricsBlock = `\n\n## Statement Data (from uploaded statement: ${latestVault.filename})
+- **Statement period:** ${latestVault.period_start} to ${latestVault.period_end}
+- **Total income:** $${latestVault.total_income}
+- **Total spending:** $${latestVault.total_spending}
+- **Fixed bills:** $${latestVault.fixed_bills}${balanceInfo}
+
+Use this data to inform your Safe-to-Spend calculations and financial coaching. The closing balance represents how much is actually in this account at the end of the statement — use it as a reality check. If the user asks "how much can I spend," factor in the real balance, not just income minus expenses.
+
+This gives you real spending patterns — you don't need to ask about lifestyle spending categories that are already visible in the statement data. You can still ask about expenses NOT covered by the statement period.`
+      } else {
+        bankStatus = "NO bank linked, NO statements uploaded — you MUST ask about lifestyle spending (eating out, activities, shopping, subscriptions) to calculate an accurate daily Safe-to-Spend. Ask naturally over the conversation, not all at once."
       }
     }
 

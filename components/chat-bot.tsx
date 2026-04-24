@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import { MessageSquare, Send, X, Sparkles, GripHorizontal } from "lucide-react"
+import { MessageSquare, Send, X, Sparkles, GripHorizontal, Paperclip } from "lucide-react"
+import { SecurityLoader } from "@/components/security-loader"
 
 type Message = {
   id: string
@@ -34,9 +35,13 @@ export function ChatBot() {
   const [unreadCount, setUnreadCount] = useState(0)
   const [welcomeLoaded, setWelcomeLoaded] = useState(false)
   const [size, setSize] = useState(DEFAULT_SIZE)
+  const [uploadStatus, setUploadStatus] = useState<"uploading" | "encrypting" | "secure" | null>(null)
+  const [uploadFileName, setUploadFileName] = useState("")
+  const [isDragging, setIsDragging] = useState(false)
 
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const openRef = useRef(open)
   const resizeRef = useRef<{ startX: number; startY: number; startW: number; startH: number } | null>(null)
   const dragControls = useDragControls()
@@ -171,6 +176,111 @@ export function ChatBot() {
     }
   }
 
+  const handleFileUpload = useCallback(async (file: File) => {
+    if (file.type !== "application/pdf") {
+      addMessage({
+        id: Date.now().toString(),
+        role: "assistant",
+        content: "I can only process PDF bank statements right now. Please upload a PDF file!",
+      })
+      return
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      addMessage({
+        id: Date.now().toString(),
+        role: "assistant",
+        content: "That file is too large (max 10MB). Try a smaller statement or just the pages with transactions.",
+      })
+      return
+    }
+
+    setUploadFileName(file.name)
+    setUploadStatus("uploading")
+
+    // Show user message about the upload
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: Date.now().toString(),
+        role: "user",
+        content: `[Uploaded bank statement: ${file.name}]`,
+      },
+    ])
+
+    try {
+      // Phase 1: Upload
+      const formData = new FormData()
+      formData.append("file", file)
+
+      // Transition to encrypting after a beat
+      await new Promise((r) => setTimeout(r, 800))
+      setUploadStatus("encrypting")
+
+      const res = await fetch("/api/vault/upload", {
+        method: "POST",
+        body: formData,
+      })
+
+      // Give the encryption animation time to be seen (minimum 1.5s)
+      await new Promise((r) => setTimeout(r, 1500))
+
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.error || "Upload failed")
+      }
+
+      const data = await res.json()
+
+      // Phase 3: Secure
+      setUploadStatus("secure")
+      await new Promise((r) => setTimeout(r, 1200))
+
+      const { summary } = data
+      addMessage({
+        id: (Date.now() + 1).toString(),
+        role: "assistant",
+        content: `I've safely processed your statement. Here's what I found:\n\n**Period:** ${summary.periodStart} to ${summary.periodEnd}\n**Income:** $${summary.totalIncome.toLocaleString()}\n**Spending:** $${summary.totalSpending.toLocaleString()}\n**Fixed Bills:** $${summary.fixedBills.toLocaleString()}\n**Transactions:** ${summary.transactionCount}\n\nYour Daily Safe-to-Spend is now updated! You can also view this statement anytime in your **Data Vault**.`,
+      })
+
+      // Notify dashboard vault + metrics
+      window.dispatchEvent(new Event("aurora-vault-updated"))
+      window.dispatchEvent(new Event("aurora-profile-updated"))
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const refresh = (window as any).__refreshDashboardMetrics
+      if (typeof refresh === "function") refresh()
+    } catch (err) {
+      addMessage({
+        id: (Date.now() + 1).toString(),
+        role: "assistant",
+        content: `Sorry, I had trouble processing that statement${err instanceof Error ? `: ${err.message}` : ""}. Could you try again or upload a different PDF?`,
+      })
+    } finally {
+      setUploadStatus(null)
+      setUploadFileName("")
+    }
+  }, [addMessage])
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+    const file = e.dataTransfer.files[0]
+    if (file) handleFileUpload(file)
+  }, [handleFileUpload])
+
   // Resize from bottom-left corner
   const handleResizeStart = (e: React.PointerEvent) => {
     e.preventDefault()
@@ -264,9 +374,42 @@ export function ChatBot() {
               zIndex: 50,
             }}
             className="flex flex-col rounded-2xl border border-white/10 bg-[#0b1120] shadow-2xl shadow-black/40 overflow-hidden"
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
           >
             {/* Aurora gradient glow on top edge */}
             <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-emerald-400 via-teal-400 to-violet-500" />
+
+            {/* Drag overlay */}
+            <AnimatePresence>
+              {isDragging && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="absolute inset-0 z-30 rounded-2xl bg-[#0b1120]/90 backdrop-blur-sm border-2 border-dashed border-teal-500/50 flex flex-col items-center justify-center gap-3"
+                >
+                  <Paperclip className="w-8 h-8 text-teal-400" />
+                  <p className="text-sm text-white/70 font-medium">Drop your bank statement here</p>
+                  <p className="text-xs text-white/30">PDF files only</p>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Upload security animation overlay */}
+            <AnimatePresence>
+              {uploadStatus && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="absolute inset-0 z-30 rounded-2xl bg-[#0b1120]/95 backdrop-blur-xl flex items-center justify-center"
+                >
+                  <SecurityLoader status={uploadStatus} fileName={uploadFileName} />
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             {/* Draggable header */}
             <div
@@ -403,7 +546,26 @@ export function ChatBot() {
 
             {/* Input area */}
             <div className="shrink-0 p-3 pt-2 border-t border-white/[0.06]">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) handleFileUpload(file)
+                  e.target.value = ""
+                }}
+              />
               <div className="flex gap-2">
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isLoading || !!uploadStatus}
+                  className="flex items-center justify-center w-10 h-10 rounded-lg border border-white/10 text-white/40 hover:text-teal-400 hover:border-teal-500/30 hover:bg-teal-500/[0.05] transition-all disabled:opacity-30 disabled:pointer-events-none shrink-0"
+                  title="Upload bank statement (PDF)"
+                >
+                  <Paperclip className="w-4 h-4" />
+                </button>
                 <Input
                   ref={inputRef}
                   value={input}

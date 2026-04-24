@@ -17,6 +17,15 @@ export type AccountBalance = {
   availableBalance: number | null
 }
 
+export type VaultMetrics = {
+  totalIncome: number
+  totalSpending: number
+  fixedBills: number
+  closingBalance: number | null
+  periodStart: string
+  periodEnd: string
+}
+
 export function calculateSafeToSpend(params: {
   monthlyIncome: number
   fixedBills: number
@@ -26,6 +35,7 @@ export function calculateSafeToSpend(params: {
   spentThisMonth: number
   taxWithholding?: boolean
   accounts?: AccountBalance[]
+  vaultMetrics?: VaultMetrics | null // manual statement data — treated as equal to Plaid
 }) {
   const now = new Date()
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
@@ -36,6 +46,28 @@ export function calculateSafeToSpend(params: {
   let effectiveIncome = params.monthlyIncome
   if (params.taxWithholding) {
     effectiveIncome *= 0.75 // hide 25% for self-employment taxes
+  }
+
+  // Merge vault (manual upload) data — treated as equal to Plaid data
+  let fixedBills = params.fixedBills
+  let spentThisMonth = params.spentThisMonth
+  if (params.vaultMetrics) {
+    const v = params.vaultMetrics
+    // If vault shows higher income, use it (same logic as Plaid observed income)
+    if (v.totalIncome > effectiveIncome) {
+      effectiveIncome = v.totalIncome
+      if (params.taxWithholding) effectiveIncome *= 0.75
+    }
+    // Merge vault spending into current month if the period overlaps
+    const now = new Date()
+    const vEnd = new Date(v.periodEnd)
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
+    if (vEnd >= startOfMonth) {
+      // Vault data covers current month — use the higher of Plaid or vault
+      fixedBills = Math.max(fixedBills, v.fixedBills)
+      const vaultDiscretionary = v.totalSpending - v.fixedBills
+      spentThisMonth = Math.max(spentThisMonth, vaultDiscretionary)
+    }
   }
 
   // Monthly savings goal based on goal and deadline
@@ -52,13 +84,13 @@ export function calculateSafeToSpend(params: {
 
   // Total monthly obligations — includes safety buffer
   const monthlyObligations =
-    params.fixedBills + monthlySavingsGoal + params.safetyBuffer
+    fixedBills + monthlySavingsGoal + params.safetyBuffer
 
   // What's left for the whole month
   const monthlyAvailable = effectiveIncome - monthlyObligations
 
   // Subtract what's already been spent this month
-  const remainingBudget = monthlyAvailable - params.spentThisMonth
+  const remainingBudget = monthlyAvailable - spentThisMonth
 
   // Daily amount
   const dailySafeToSpend = remainingBudget / daysRemaining
@@ -69,7 +101,12 @@ export function calculateSafeToSpend(params: {
   let checkingTotal = 0
   let creditCardDebt = 0
 
-  if (params.accounts && params.accounts.length > 0) {
+  // Use vault closing balance as spendable cash when no bank accounts are linked
+  if ((!params.accounts || params.accounts.length === 0) && params.vaultMetrics?.closingBalance != null) {
+    spendableCash = params.vaultMetrics.closingBalance
+    visualSpendableCash = spendableCash - params.safetyBuffer
+    checkingTotal = params.vaultMetrics.closingBalance
+  } else if (params.accounts && params.accounts.length > 0) {
     for (const acct of params.accounts) {
       if (acct.type === "depository") {
         // Use available balance if present (accounts for pending holds), else current

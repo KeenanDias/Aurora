@@ -12,8 +12,8 @@ export async function POST() {
   const response = await plaidClient.linkTokenCreate({
     user: { client_user_id: userId },
     client_name: "Aurora AI",
-    products: [Products.Transactions],
-    country_codes: [CountryCode.Us],
+    products: [Products.Transactions, Products.Auth],
+    country_codes: [CountryCode.Us, CountryCode.Ca],
     language: "en",
   })
 

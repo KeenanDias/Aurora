@@ -7,6 +7,7 @@ import { PlaidLinkButton } from "@/components/plaid-link-button"
 
 export function DashboardContent({
   bankLinked: initialBankLinked,
+  hasVaultData: initialHasVaultData,
   goalDescription,
   goalAmount,
   goalDeadline,
@@ -14,6 +15,7 @@ export function DashboardContent({
   safetyBuffer: initialBuffer,
 }: {
   bankLinked: boolean
+  hasVaultData?: boolean
   goalDescription?: string
   goalAmount?: number
   goalDeadline?: string
@@ -28,6 +30,7 @@ export function DashboardContent({
   })
   const [safetyBuffer, setSafetyBuffer] = useState(initialBuffer ?? 0)
   const [bankLinked, setBankLinked] = useState(initialBankLinked)
+  const [hasVaultData, setHasVaultData] = useState(initialHasVaultData ?? false)
 
   // Refetch profile when Aurora updates it via chat
   useEffect(() => {
@@ -54,8 +57,19 @@ export function DashboardContent({
       if (typeof refresh === "function") refresh()
     }
 
+    const handleVaultUpdate = () => {
+      setHasVaultData(true)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const refresh = (window as any).__refreshDashboardMetrics
+      if (typeof refresh === "function") refresh()
+    }
+
     window.addEventListener("aurora-profile-updated", handleProfileUpdate)
-    return () => window.removeEventListener("aurora-profile-updated", handleProfileUpdate)
+    window.addEventListener("aurora-vault-updated", handleVaultUpdate)
+    return () => {
+      window.removeEventListener("aurora-profile-updated", handleProfileUpdate)
+      window.removeEventListener("aurora-vault-updated", handleVaultUpdate)
+    }
   }, [])
 
   const handlePlaidSuccess = useCallback(() => {
@@ -72,7 +86,7 @@ export function DashboardContent({
   return (
     <>
       {/* Metrics cards */}
-      <DashboardMetrics bankLinked={bankLinked} />
+      <DashboardMetrics bankLinked={bankLinked} hasVaultData={hasVaultData} />
 
       {/* Goal progress (if set) */}
       {goal.amount && goal.deadline && (() => {

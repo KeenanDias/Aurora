@@ -3,7 +3,7 @@ import { NextResponse } from "next/server"
 import { plaidClient } from "@/lib/plaid"
 import { getSupabase } from "@/lib/supabase"
 import { calculateSafeToSpend } from "@/lib/safe-to-spend"
-import type { AccountBalance } from "@/lib/safe-to-spend"
+import type { AccountBalance, VaultMetrics } from "@/lib/safe-to-spend"
 
 // Categories to ignore for spending — internal money movements, not real spending
 const IGNORED_SPENDING_CATEGORIES = new Set([
@@ -34,11 +34,63 @@ export async function GET() {
     .eq("clerk_user_id", userId)
     .single()
 
-  if (!profile || !profile.plaid_access_token) {
-    return NextResponse.json(
-      { error: "No bank linked" },
-      { status: 400 }
-    )
+  if (!profile) {
+    return NextResponse.json({ error: "No profile" }, { status: 400 })
+  }
+
+  // ── Vault-only path: no bank linked but has uploaded statements ────
+  if (!profile.plaid_access_token) {
+    const { data: latestVault } = await getSupabase()
+      .from("vault_uploads")
+      .select("total_income, total_spending, fixed_bills, closing_balance, period_start, period_end")
+      .eq("clerk_user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single()
+
+    if (!latestVault) {
+      return NextResponse.json({ error: "No bank linked and no statements uploaded" }, { status: 400 })
+    }
+
+    const vaultMetrics: VaultMetrics = {
+      totalIncome: latestVault.total_income,
+      totalSpending: latestVault.total_spending,
+      fixedBills: latestVault.fixed_bills,
+      closingBalance: latestVault.closing_balance ?? null,
+      periodStart: latestVault.period_start,
+      periodEnd: latestVault.period_end,
+    }
+
+    const incomeUsed = Math.max(profile.monthly_income ?? 0, vaultMetrics.totalIncome)
+
+    const safeToSpend = calculateSafeToSpend({
+      monthlyIncome: incomeUsed,
+      fixedBills: 0,
+      goalAmount: profile.goal_amount,
+      goalDeadline: profile.goal_deadline,
+      safetyBuffer: profile.safety_buffer ?? 0,
+      spentThisMonth: 0,
+      taxWithholding: profile.tax_withholding ?? false,
+      accounts: [],
+      vaultMetrics,
+    })
+
+    return NextResponse.json({
+      safeToSpend,
+      income: {
+        selfReported: profile.monthly_income ?? 0,
+        observed: vaultMetrics.totalIncome,
+        used: Math.round(incomeUsed * 100) / 100,
+        usingObserved: incomeUsed > (profile.monthly_income ?? 0),
+      },
+      accounts: [],
+      totalBalance: 0,
+      spentThisMonth: Math.round(vaultMetrics.totalSpending * 100) / 100,
+      fixedBills: Math.round(vaultMetrics.fixedBills * 100) / 100,
+      spendingByCategory: {},
+      recentTransactions: [],
+      source: "vault",
+    })
   }
 
   // Get last 30 days of transactions
@@ -134,6 +186,27 @@ export async function GET() {
     0
   )
 
+  // Fetch latest vault upload for this user (if any) to merge manual statement data
+  let vaultMetrics: VaultMetrics | null = null
+  const { data: latestVault } = await getSupabase()
+    .from("vault_uploads")
+    .select("total_income, total_spending, fixed_bills, closing_balance, period_start, period_end")
+    .eq("clerk_user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single()
+
+  if (latestVault) {
+    vaultMetrics = {
+      totalIncome: latestVault.total_income,
+      totalSpending: latestVault.total_spending,
+      fixedBills: latestVault.fixed_bills,
+      closingBalance: latestVault.closing_balance ?? null,
+      periodStart: latestVault.period_start,
+      periodEnd: latestVault.period_end,
+    }
+  }
+
   // Calculate Safe-to-Spend with account data for liquidity
   // Pass discretionary spending so fixed bills aren't subtracted twice
   const safeToSpend = calculateSafeToSpend({
@@ -145,6 +218,7 @@ export async function GET() {
     spentThisMonth: discretionarySpent,
     taxWithholding: profile.tax_withholding ?? false,
     accounts: accountBalances,
+    vaultMetrics,
   })
 
   // Categorize spending (excluding transfers)
