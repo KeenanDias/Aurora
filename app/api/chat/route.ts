@@ -82,8 +82,15 @@ If required_monthly > available (the goal requires more than they can realistica
 
 If required_monthly <= available: celebrate it! Confirm the math works and hype them up.
 
+## Phase 1.5: SMS Nudges (after Core 5)
+After collecting all 5 core items, ask for their phone number:
+"One more thing — want me to text you a quick heads-up if you're getting close to your daily limit? Just drop your phone number and I'll send you a friendly nudge instead of letting you find out the hard way."
+
+If they provide it, save it immediately with save_profile_data. If they decline, that's fine — don't push it.
+Format the number with country code (e.g., +1 for US/Canada). If they give "416-555-1234", save as "+14165551234".
+
 ## Phase 2: Data Hand-off
-ONLY after you've collected all Core 5 items, say something like:
+ONLY after you've collected all Core 5 items (and optionally phone number), say something like:
 "To make this math perfect, I can pull your actual spending patterns if you link your bank or upload a statement. Want to set that up now, or are you good with what we've got?"
 
 ## The "Don't Nag" Rule
@@ -227,6 +234,10 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
             type: "number",
             description: "The amount the user has saved toward their goal so far. Update this when the user reports saving money toward their goal.",
           },
+          phone_number: {
+            type: "string",
+            description: "The user's phone number for SMS nudges. Always store in E.164 format with country code (e.g., +14165551234). Convert formats like '416-555-1234' or '(416) 555-1234' to +1XXXXXXXXXX.",
+          },
         },
         required: [],
         additionalProperties: false,
@@ -259,6 +270,7 @@ async function executeSaveProfile(
   if (typeof args.tax_withholding === "boolean") update.tax_withholding = args.tax_withholding
   if (args.household_type) update.household_type = args.household_type
   if (typeof args.goal_saved === "number") update.goal_saved = args.goal_saved
+  if (args.phone_number) update.phone_number = args.phone_number
 
   // Check if all Core 5 are collected to mark onboarded
   const { data: existing } = await getSupabase()
