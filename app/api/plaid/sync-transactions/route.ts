@@ -3,7 +3,7 @@ import { NextResponse } from "next/server"
 import { plaidClient } from "@/lib/plaid"
 import { getSupabase } from "@/lib/supabase"
 import { calculateSafeToSpend } from "@/lib/safe-to-spend"
-import type { AccountBalance, VaultMetrics } from "@/lib/safe-to-spend"
+import type { AccountBalance, VaultMetrics, UpcomingBill } from "@/lib/safe-to-spend"
 
 // Categories to ignore for spending — internal money movements, not real spending
 const IGNORED_SPENDING_CATEGORIES = new Set([
@@ -21,6 +21,35 @@ const IGNORED_INCOME_CATEGORIES = new Set([
   "CREDIT_CARD",
 ])
 
+async function fetchUpcomingBills(userId: string, now: Date): Promise<UpcomingBill[]> {
+  const { data: bills } = await getSupabase()
+    .from("recurring_bills")
+    .select("name, amount, due_day")
+    .eq("clerk_user_id", userId)
+    .eq("is_active", true)
+
+  if (!bills || bills.length === 0) return []
+
+  const currentDay = now.getDate()
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+
+  return bills
+    .map((b) => {
+      const dueDay = Math.min(b.due_day, daysInMonth)
+      let dueDate: Date
+      if (dueDay >= currentDay) {
+        dueDate = new Date(now.getFullYear(), now.getMonth(), dueDay)
+      } else {
+        dueDate = new Date(now.getFullYear(), now.getMonth() + 1, Math.min(b.due_day, new Date(now.getFullYear(), now.getMonth() + 2, 0).getDate()))
+      }
+      return { name: b.name as string, amount: b.amount as number, dueDate: dueDate.toISOString().split("T")[0] }
+    })
+    .filter((b) => {
+      const days = Math.ceil((new Date(b.dueDate).getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+      return days >= 0 && days <= 7
+    })
+}
+
 export async function GET() {
   const { userId } = await auth()
   if (!userId) {
@@ -37,6 +66,9 @@ export async function GET() {
   if (!profile) {
     return NextResponse.json({ error: "No profile" }, { status: 400 })
   }
+
+  const now = new Date()
+  const upcomingBills = await fetchUpcomingBills(userId, now)
 
   // ── Vault-only path: no bank linked but has uploaded statements ────
   if (!profile.plaid_access_token) {
@@ -68,11 +100,14 @@ export async function GET() {
       fixedBills: 0,
       goalAmount: profile.goal_amount,
       goalDeadline: profile.goal_deadline,
+      goalStatus: profile.goal_status ?? "active",
+      goalSaved: profile.goal_saved ?? 0,
       safetyBuffer: profile.safety_buffer ?? 0,
       spentThisMonth: 0,
       taxWithholding: profile.tax_withholding ?? false,
       accounts: [],
       vaultMetrics,
+      upcomingBills,
     })
 
     return NextResponse.json({
@@ -94,7 +129,6 @@ export async function GET() {
   }
 
   // Get last 30 days of transactions
-  const now = new Date()
   const thirtyDaysAgo = new Date(now)
   thirtyDaysAgo.setDate(now.getDate() - 30)
 
@@ -214,11 +248,14 @@ export async function GET() {
     fixedBills,
     goalAmount: profile.goal_amount,
     goalDeadline: profile.goal_deadline,
+    goalStatus: profile.goal_status ?? "active",
+    goalSaved: profile.goal_saved ?? 0,
     safetyBuffer: profile.safety_buffer ?? 0,
     spentThisMonth: discretionarySpent,
     taxWithholding: profile.tax_withholding ?? false,
     accounts: accountBalances,
     vaultMetrics,
+    upcomingBills,
   })
 
   // Categorize spending (excluding transfers)

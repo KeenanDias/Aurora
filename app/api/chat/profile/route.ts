@@ -10,7 +10,7 @@ export async function GET() {
 
   const { data: profile, error } = await getSupabase()
     .from("user_profiles")
-    .select("name, onboarded, goal_description, goal_amount, goal_deadline, goal_saved, monthly_income, safety_buffer, bank_linked")
+    .select("name, onboarded, goal_description, goal_amount, goal_deadline, goal_saved, goal_status, monthly_income, safety_buffer, bank_linked, points, points_streak, longest_streak")
     .eq("clerk_user_id", userId)
     .single()
 
@@ -21,7 +21,7 @@ export async function GET() {
   // Fallback without goal_saved if column doesn't exist yet
   const { data: fallback } = await getSupabase()
     .from("user_profiles")
-    .select("name, onboarded, goal_description, goal_amount, goal_deadline, monthly_income, safety_buffer, bank_linked")
+    .select("name, onboarded, goal_description, goal_amount, goal_deadline, monthly_income, safety_buffer, bank_linked, goal_status, points, points_streak, longest_streak")
     .eq("clerk_user_id", userId)
     .single()
 

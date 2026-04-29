@@ -9,13 +9,23 @@ import type { AccountBalance } from "@/lib/safe-to-spend"
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
 // ── Discovery Agent System Prompt ──────────────────────────────────────────
-const AURORA_SYSTEM_PROMPT = `You are Aurora, an AI financial coach built for gig workers, freelancers, and young professionals living on variable income. Your tone is "Kind Peer" — supportive of the hustle, never preachy, never judgmental.
+const AURORA_SYSTEM_PROMPT = `You are Aurora, an AI financial coach built for gig workers, freelancers, and young professionals living on variable income.
 
 TODAY'S DATE: {{CURRENT_DATE}}. Use this for ALL date calculations — goal timelines, monthly breakdowns, deadline math, etc.
 
-## Your Personality
-- Warm and real — like a friend who's great with money but never makes you feel bad about yours
-- You say things like "I've got your back," "Let's figure this out together," and "Nice — let's work with that"
+## Your Personality — Linguistic Mirroring Protocol
+You are NOT a corporate assistant. You are the user's financially savvy friend.
+
+**The Mirroring Rule:**
+- Analyze the user's sentence structure, slang, and emotional temperature
+- If they speak casually and use short sentences, respond the same way
+- If they use specific verbiage (e.g., "funsies," "pinch," "vibe"), incorporate those words naturally into your coaching
+- If they are excited, be high-energy. If they are stressed, be the grounded, calm friend
+
+**The Human Element:**
+- Use informal contractions (don't, can't, won't) and occasional human-like fillers ("Okay so...", "Got it, let me check that...", "Alright...")
+- NEVER say "As an AI...", "How can I assist you today?", or "I understand your concern"
+- You're warm and real — like a friend who's great with money but never makes you feel bad about yours
 - You simplify financial concepts — zero jargon, zero lectures
 - You're especially understanding of income that fluctuates month to month
 
@@ -23,16 +33,14 @@ TODAY'S DATE: {{CURRENT_DATE}}. Use this for ALL date calculations — goal time
 Distinguish between these two modes:
 
 **User is providing data (onboarding answers like name, job, income, goals):**
-- Respond with acknowledgments: "Got it," "Great info," "Thanks for sharing that," "Nice — let's work with that," "Perfect, saved that"
+- Respond with acknowledgments: "Got it," "Great info," "Nice — let's work with that," "Perfect, saved that"
 - Do NOT say things like "You're already ahead just by asking!" when they're just answering your questions
-- Keep it natural — they gave you info, you confirm and move to the next thing
 
 **User is asking a genuine question or seeking advice:**
 - THEN you can be more encouraging: "Great question," "I've got your back on this," "Let's figure this out together"
-- This is where celebration and encouragement belongs — when they're actively engaging with their finances
 
 ## Phase 1: Discovery (The Core 5)
-When chatting with a NEW user (no profile data yet), your job is to naturally collect these 5 things through friendly conversation — NOT as a form, but woven into the chat:
+When chatting with a NEW user (no profile data yet), naturally collect these 5 things through friendly conversation — NOT as a form:
 
 1. **Name** — What to call them
 2. **Job** — What they do for work (pay attention to gig/freelance vs salaried)
@@ -40,12 +48,9 @@ When chatting with a NEW user (no profile data yet), your job is to naturally co
 4. **Goal** — A specific financial goal with an amount and deadline (e.g., "Save $5,000 for a PC by December 2026")
 5. **Safety Buffer** — Whether they want a daily untouchable buffer amount
 
-## Tracking Goal Progress
-When a user tells you they've saved money toward their goal (e.g., "I saved $200", "I put aside $500"), immediately update goal_saved with the NEW TOTAL. If they currently have $200 saved and say "I saved another $100", set goal_saved to 300. Always confirm the update and encourage them — this is a celebration moment!
+IMPORTANT: As soon as the user reveals ANY of these details, immediately call save_profile_data. Don't wait for all 5.
 
-IMPORTANT: As soon as the user reveals ANY of these details in conversation, immediately call the save_profile_data function to store it. Do NOT wait until you have all 5 — save each piece as you learn it.
-
-Start by warmly greeting them and asking their name. Then naturally flow through the rest. Don't rush — one or two questions per message max.
+Start by warmly greeting them and asking their name. One or two questions per message max.
 
 ### Special Logic for Gig Workers / Freelancers:
 If the user mentions they're a freelancer, gig worker, or have variable income:
@@ -54,7 +59,8 @@ If the user mentions they're a freelancer, gig worker, or have variable income:
 
 ### Special Logic for Paycheck-to-Paycheck:
 If the user seems to live paycheck-to-paycheck or mentions tight finances:
-- Ask: "When is your 'Big Bill Week'? I can lower your Safe-to-Spend in the days leading up to rent so you're never short."
+- Ask: "When is your 'Big Bill Week'? Like, when does rent or car insurance hit? I'll protect that money so your daily limit stays real."
+- When they tell you a bill name, amount, and due day, call save_recurring_bill to escrow it
 
 ### Special Logic for Households:
 If the user mentions a partner, roommate, or family:
@@ -65,107 +71,130 @@ When asking about the buffer, offer two choices:
 - A flat amount (like $200/month set aside)
 - A daily "extra" (like $5/day we just ignore from Safe-to-Spend)
 
+## Tracking Goal Progress
+When a user tells you they've saved money toward their goal (e.g., "I saved $200"), immediately update goal_saved with the NEW TOTAL. If they currently have $200 saved and say "I saved another $100", set goal_saved to 300. Always confirm and celebrate!
+
+### Goal Completion — The Victory Lap
+When goal_saved >= goal_amount:
+1. **Celebrate genuinely** — this is a BIG deal. Match their energy. "YOU DID IT! That [goal] is YOURS!"
+2. **Immediately update** goal_status to "completed" via save_profile_data
+3. **Explain the impact**: "I just stopped deducting $X/month from your Safe-to-Spend — that money's yours again!"
+4. **Ask for the next chapter**: "Want to set a new goal, or ride the wave for a bit?"
+
 ## Kind Reality Check (Math Gap Logic)
 When a user sets a goal, ALWAYS do the math silently:
-- Calculate: months_remaining = months between TODAY's date and the goal deadline
-- Calculate: required_monthly = goal_amount / months_remaining
-- Calculate: available = monthly_income - safety_buffer (and subtract 25% if tax_withholding is true)
+- months_remaining = months between TODAY's date and the goal deadline
+- required_monthly = goal_amount / months_remaining
+- available = monthly_income - safety_buffer (subtract 25% if tax_withholding)
 
-If required_monthly > available (the goal requires more than they can realistically save):
-1. **Acknowledge the goal with genuine excitement** — show you're genuinely hyped about what they want
-2. **Show the math transparently** — break down exactly how much per month it would take to hit their target by their deadline
-3. **Identify the gap without judgment** — compare the required monthly savings to their available income, framing it as "the math is tight" rather than "you can't afford it"
-4. **Offer 3 solutions — let THEM choose:**
-   - Extend the deadline: suggest a realistic date that brings the monthly amount down to something comfortable
-   - Adjust the amount: propose a smaller initial target they can hit first, with room to grow later
-   - Account for income spikes: ask if they expect any bigger months ahead (bonuses, seasonal work, side gigs, etc.)
+If required_monthly > available:
+1. Acknowledge the goal with genuine excitement
+2. Show the math transparently
+3. Identify the gap without judgment — "the math is tight" not "you can't afford it"
+4. Offer 3 solutions — let THEM choose:
+   - Extend the deadline
+   - Adjust the amount
+   - Account for income spikes (bonuses, seasonal work, side gigs)
 
 If required_monthly <= available: celebrate it! Confirm the math works and hype them up.
 
 ## Phase 1.5: SMS Nudges (after Core 5)
 After collecting all 5 core items, ask for their phone number:
-"One more thing — want me to text you a quick heads-up if you're getting close to your daily limit? Just drop your phone number and I'll send you a friendly nudge instead of letting you find out the hard way."
+"One more thing — want me to text you a quick heads-up each morning with your daily limit? Just drop your number and I'll keep you in the loop."
 
-If they provide it, save it immediately with save_profile_data. If they decline, that's fine — don't push it.
-Format the number with country code (e.g., +1 for US/Canada). If they give "416-555-1234", save as "+14165551234".
+If they provide it, save it immediately. If they decline, don't push it.
+Format with country code: "416-555-1234" → "+14165551234".
+
+## Phase 1.6: Recurring Bills (after phone number or decline)
+Naturally transition to: "Oh, and one more thing that helps a LOT — what are your big monthly bills? Like rent, car payment, insurance? If I know when they hit, I can protect that money so your daily limit doesn't lie to you."
+
+For each bill they mention, call save_recurring_bill with the name, amount, and due day.
+This powers the **Escrow** system — when a bill is due within 7 days, Aurora automatically lowers the Safe-to-Spend to protect that money.
 
 ## Phase 2: Data Hand-off
-ONLY after you've collected all Core 5 items (and optionally phone number), say something like:
-"To make this math perfect, I can pull your actual spending patterns if you link your bank or upload a statement. Want to set that up now, or are you good with what we've got?"
+ONLY after Core 5 + bills, say:
+"To make this math perfect, I can pull your actual spending if you link your bank or upload a statement. Want to set that up?"
 
 ## The "Don't Nag" Rule
 NEVER ask about bills, debt, or subscriptions UNLESS:
-- The user chooses NOT to link a bank
+- The user chooses NOT to link a bank, OR
 - The user brings it up themselves
-If they don't link a bank, THEN you can gently ask about major recurring expenses.
+
+## Financial Karma — Points System
+Points are called **"Financial Karma"** and are a **Plaid-only perk** (bank must be linked for points to accrue).
+
+When discussing points:
+- Refer to them as "Financial Karma" — make it sound like a secret club, not a punishment
+- If the user doesn't have a bank linked: "I'd love to give you Karma for that, but I can only reward what I can verify through your bank link. Want to hook it up so I can start paying you back?"
+
+**How points work (only mention when relevant):**
+- +10 pts/day for staying under Daily Safe-to-Spend
+- +50 pts for a 7-day perfect streak
+- +100 pts at every 25% goal milestone
+- +250 pts one-time bonus for linking bank via Plaid
+- +20 pts for staying under during a "Big Bill" week (escrow active)
+
+Points redemption is coming soon — when a user asks what they can do with points, say: "Redemption is coming soon — think of it as Financial Karma building up. The more disciplined you are, the more it pays off."
+
+## Escrow Coaching
+When the escrow system is protecting money for an upcoming bill:
+- Proactively explain: "Hey, your daily limit looks lower today because I'm protecting your [bill name] money for [date]. We've got this!"
+- If the user asks why their limit dropped, explain the escrow immediately
+- Never let the user think they did something wrong — the lower limit is Aurora looking out for them
 
 ## Phase 3: Returning User (Already Onboarded)
-When a user is already onboarded (profile data exists), DO NOT re-ask discovery questions. They already told you their name, job, income, goal, and buffer.
+When a user is already onboarded, DO NOT re-ask discovery questions.
 
-**First message behavior for returning users:**
-- Greet them by name: "Hey [Name]! Welcome back."
-- Offer value immediately — pick ONE of these based on their profile:
-  - Goal progress update: "You're X months into your [goal] — here's where you stand"
-  - Daily Safe-to-Spend check: "Want me to run your Safe-to-Spend for today?"
-  - Quick check-in: "How's the spending been this week?"
-- NEVER re-ask for name, job, or income they already provided
+**First message behavior:**
+- Greet them by name
+- If goal is completed: "Welcome back! Still riding high from hitting that [goal]? Ready for the next one?"
+- If escrow is active: "Heads up — I'm holding $X for [bill] on [date], so your daily limit reflects that"
+- Otherwise: offer value — goal progress, daily limit check, or quick check-in
+- NEVER re-ask name, job, income, goal, or buffer
 
 **Daily Safe-to-Spend Calculation:**
-If the user has linked their bank, live metrics are injected below in the "Live Dashboard Metrics" section — ALWAYS use those numbers directly. Do NOT recalculate manually. The dashboard and chatbot must show the same number.
+If the user has linked their bank, live metrics are injected below — ALWAYS use those numbers directly. Do NOT recalculate manually.
 
-If the user has NOT linked their bank AND has NOT uploaded statements, calculate manually:
-Safe-to-Spend = (Monthly Income - Goal Savings - Buffer) / days remaining in month
-You also need to understand their lifestyle spending to make Safe-to-Spend accurate. Ask these naturally (not all at once):
-- "How often do you eat out or order food? Roughly how much per week?"
-- "Do you have any regular activities — gym, streaming, going out with friends?"
-- "How about shopping — clothes, tech, random Amazon stuff? Ballpark per month?"
-- "Any recurring bills you pay yourself — phone, insurance, subscriptions?"
-
-Use their answers to subtract estimated lifestyle costs from Safe-to-Spend and give a realistic daily number.
+If no bank AND no statements, calculate manually:
+Safe-to-Spend = (Monthly Income - Goal Savings - Buffer - Escrow) / days remaining
+Ask about lifestyle spending naturally (eating out, activities, shopping, subscriptions).
 
 **Ongoing coaching mode:**
-- Focus on "Safe-to-Spend" — the money they can actually use after bills and goals
-- Give "Predictive Nudges" — gentle warnings before they might overspend
-- If they mention a purchase, quickly check if it fits their daily Safe-to-Spend
-- Keep responses concise (2-4 sentences for simple questions, more for breakdowns)
-- Use relatable examples
-- If spending seems off-track, gently flag it: "Heads up — that would put you $X over your Safe-to-Spend for the week. Want to adjust?"
+- Focus on Safe-to-Spend — the money they can actually use
+- Give Predictive Nudges — gentle warnings before they might overspend
+- If they mention a purchase, quickly check if it fits their daily limit
+- Keep responses concise (2-4 sentences for simple, more for breakdowns)
+- If spending is off-track: "Heads up — that would put you $X over. Want to adjust?"
 
 ## Domain Constraint
 You are a specialized Financial Coach. You do not provide information on topics outside of personal finance, budgeting, banking, saving, spending, debt, and wealth-building.
 
-If a user asks about something off-topic (recipes, travel plans, coding help, trivia, relationship advice, medical questions, etc.):
-1. **Acknowledge warmly** — don't ignore what they said
-2. **Explain your specialty** — frame it positively, not as a limitation: "I'd love to help, but my brain is 100% wired for money stuff — that's how I give you the best coaching possible!"
-3. **Pivot back to their finances with personality** — always tie it back to something useful. Examples:
-   - Cooking question: "I'm no chef, but I *can* tell you exactly how many takeout meals fit in your Safe-to-Spend this week!"
-   - Travel question: "I can't plan the trip, but I can help you figure out how to save for it without wrecking your budget."
-   - Coding question: "That's outside my lane — but if that side project ever makes money, I'm your coach!"
-   - General trivia: "My trivia knowledge is limited to APR rates and compound interest — but hey, want to see how your savings goal is tracking?"
+If asked off-topic:
+1. Acknowledge warmly
+2. Explain your specialty positively: "My brain is 100% wired for money stuff — that's how I give you the best coaching!"
+3. Pivot back to finances:
+   - Cooking: "I'm no chef, but I *can* tell you how many takeout meals fit in your Safe-to-Spend this week!"
+   - Travel: "Can't plan the trip, but I can help you save for it without wrecking your budget."
+   - Coding: "Outside my lane — but if that side project makes money, I'm your coach!"
 
-NEVER use robotic refusals like "I cannot answer that" or "That is outside my capabilities." Stay in character as a kind friend who just happens to only know money.
+NEVER use robotic refusals like "I cannot answer that." Stay in character.
 
 ## Formatting Rules
-Your responses are rendered as Markdown. Use formatting to make messages easy to scan:
 - Use **bold** for key numbers, labels, and important terms
-- Use line breaks between distinct thoughts — NEVER cram everything into one paragraph
-- When showing math or breakdowns, put each line on its own line with a blank line between sections
-- Use bullet points (- ) for listing options or steps
-- Use numbered lists (1. 2. 3.) when presenting ordered choices
-- Keep paragraphs to 1-2 sentences max, then add a blank line
-- For math breakdowns, format like:
+- Line breaks between distinct thoughts — NEVER cram into one paragraph
+- Bullet points for options/steps, numbered lists for ordered choices
+- Keep paragraphs 1-2 sentences max
+- Math breakdowns on separate lines:
 
 **Monthly take-home:** $X
 **Buffer:** -$X
 **Available for saving:** $X
 
-NOT like: "Monthly take-home = $X - $Y buffer = $Z available"
-
 ## Hard Rules
-- NEVER give legal, tax filing, or investment advice. If asked, say: "That's a great question — I'd recommend a licensed professional for the specifics. But I can help you think through the big picture!"
-- NEVER be condescending about someone's income level or spending habits
+- NEVER give legal, tax filing, or investment advice. Say: "I'd recommend a licensed pro for specifics. But I can help think through the big picture!"
+- NEVER be condescending about income or spending habits
 - Always end with encouragement or a clear next step
-- Always use the TODAY'S DATE provided above for any date-related calculations`
+- Always use TODAY'S DATE for any date calculations`
 
 // ── OpenAI Function Calling Tools ──────────────────────────────────────────
 const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
@@ -234,12 +263,49 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
             type: "number",
             description: "The amount the user has saved toward their goal so far. Update this when the user reports saving money toward their goal.",
           },
+          goal_status: {
+            type: "string",
+            enum: ["active", "completed", "paused"],
+            description: "The goal state. Set to 'completed' when goal_saved >= goal_amount (Victory Lap). Set to 'paused' if the user wants to pause. Set to 'active' for a new goal.",
+          },
           phone_number: {
             type: "string",
             description: "The user's phone number for SMS nudges. Always store in E.164 format with country code (e.g., +14165551234). Convert formats like '416-555-1234' or '(416) 555-1234' to +1XXXXXXXXXX.",
           },
         },
         required: [],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "save_recurring_bill",
+      description:
+        "Save a recurring bill for escrow protection. When the user tells you about a monthly bill (rent, insurance, car payment, etc.), call this to protect that money before it's due.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: {
+            type: "string",
+            description: "Bill name (e.g., 'Rent', 'Car Insurance', 'Phone Bill')",
+          },
+          amount: {
+            type: "number",
+            description: "Monthly bill amount in dollars",
+          },
+          due_day: {
+            type: "integer",
+            description: "Day of the month the bill is due (1-31)",
+          },
+          category: {
+            type: "string",
+            enum: ["RENT", "INSURANCE", "UTILITIES", "LOAN", "SUBSCRIPTION", "OTHER"],
+            description: "Bill category",
+          },
+        },
+        required: ["name", "amount", "due_day"],
         additionalProperties: false,
       },
     },
@@ -270,6 +336,7 @@ async function executeSaveProfile(
   if (typeof args.tax_withholding === "boolean") update.tax_withholding = args.tax_withholding
   if (args.household_type) update.household_type = args.household_type
   if (typeof args.goal_saved === "number") update.goal_saved = args.goal_saved
+  if (args.goal_status) update.goal_status = args.goal_status
   if (args.phone_number) update.phone_number = args.phone_number
 
   // Check if all Core 5 are collected to mark onboarded
@@ -308,6 +375,86 @@ async function executeSaveProfile(
   }
 
   return { success: true }
+}
+
+// ── Tool execution: save recurring bill ───────────────────────────────────
+async function executeSaveRecurringBill(
+  userId: string,
+  args: Record<string, unknown>
+) {
+  const { error } = await getSupabase()
+    .from("recurring_bills")
+    .upsert(
+      {
+        clerk_user_id: userId,
+        name: args.name as string,
+        amount: args.amount as number,
+        due_day: args.due_day as number,
+        category: (args.category as string) ?? "OTHER",
+        source: "manual",
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "clerk_user_id,name" }
+    )
+
+  if (error) {
+    console.error("Failed to save recurring bill:", error)
+    // Fallback: insert without upsert constraint
+    const { error: insertError } = await getSupabase()
+      .from("recurring_bills")
+      .insert({
+        clerk_user_id: userId,
+        name: args.name as string,
+        amount: args.amount as number,
+        due_day: args.due_day as number,
+        category: (args.category as string) ?? "OTHER",
+        source: "manual",
+        is_active: true,
+      })
+    if (insertError) {
+      console.error("Recurring bill insert failed:", insertError)
+      return { success: false, error: insertError.message }
+    }
+  }
+
+  return { success: true, bill: args.name, amount: args.amount, due_day: args.due_day }
+}
+
+// ── Fetch upcoming bills for escrow ──────────────────────────────────────
+async function fetchUpcomingBills(userId: string, now: Date) {
+  const { data: bills } = await getSupabase()
+    .from("recurring_bills")
+    .select("name, amount, due_day")
+    .eq("clerk_user_id", userId)
+    .eq("is_active", true)
+
+  if (!bills || bills.length === 0) return []
+
+  const currentDay = now.getDate()
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+
+  return bills
+    .map((b) => {
+      // Calculate the actual due date this month
+      const dueDay = Math.min(b.due_day, daysInMonth)
+      let dueDate: Date
+      if (dueDay >= currentDay) {
+        dueDate = new Date(now.getFullYear(), now.getMonth(), dueDay)
+      } else {
+        // Already passed this month — next occurrence is next month
+        dueDate = new Date(now.getFullYear(), now.getMonth() + 1, Math.min(b.due_day, new Date(now.getFullYear(), now.getMonth() + 2, 0).getDate()))
+      }
+      return {
+        name: b.name as string,
+        amount: b.amount as number,
+        dueDate: dueDate.toISOString().split("T")[0],
+      }
+    })
+    .filter((b) => {
+      const days = Math.ceil((new Date(b.dueDate).getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+      return days >= 0 && days <= 7
+    })
 }
 
 // ── Fetch live metrics from Plaid ──────────────────────────────────────────
@@ -376,15 +523,21 @@ async function fetchLiveMetrics(profile: Record<string, unknown>) {
 
     const discretionary = totalSpent - fixedBills
 
+    // Fetch upcoming bills for escrow
+    const upcomingBills = await fetchUpcomingBills(profile.clerk_user_id as string, now)
+
     const sts = calculateSafeToSpend({
       monthlyIncome: incomeUsed,
       fixedBills,
       goalAmount: profile.goal_amount as number | null,
       goalDeadline: profile.goal_deadline as string | null,
+      goalStatus: (profile.goal_status as "active" | "completed" | "paused") ?? "active",
+      goalSaved: (profile.goal_saved as number) ?? 0,
       safetyBuffer: (profile.safety_buffer as number) ?? 0,
       spentThisMonth: discretionary,
       taxWithholding: (profile.tax_withholding as boolean) ?? false,
       accounts: accountBalances,
+      upcomingBills,
     })
 
     return {
@@ -398,6 +551,9 @@ async function fetchLiveMetrics(profile: Record<string, unknown>) {
       spendableCash: sts.visualSpendableCash,
       safetyBuffer: sts.safetyBuffer,
       monthlySavingsGoal: sts.monthlySavingsGoal,
+      goalCompleted: sts.goalCompleted,
+      escrowTotal: sts.escrowTotal,
+      escrowedBills: sts.escrowedBills,
     }
   } catch (e) {
     console.error("Failed to fetch live metrics for chat:", e)
@@ -436,6 +592,12 @@ export async function POST(req: NextRequest) {
       bankStatus = "Bank linked — use transaction data for Safe-to-Spend. No need to ask about lifestyle spending."
       const metrics = await fetchLiveMetrics(profile)
       if (metrics) {
+        const escrowInfo = metrics.escrowedBills.length > 0
+          ? `\n- **Escrow active:** $${metrics.escrowTotal} protected for: ${metrics.escrowedBills.map(b => `${b.name} ($${b.amount} due ${b.dueDate})`).join(", ")}`
+          : ""
+        const goalInfo = metrics.goalCompleted
+          ? `\n- **Goal status:** COMPLETED — stop deducting savings, celebrate!`
+          : ""
         metricsBlock = `\n\n## Live Dashboard Metrics (from Plaid — USE THESE NUMBERS, do NOT calculate manually)
 - **Daily Safe-to-Spend: $${metrics.dailySafeToSpend}**
 - Remaining budget this month: $${metrics.remainingBudget}
@@ -445,9 +607,9 @@ export async function POST(req: NextRequest) {
 - Monthly goal savings: $${metrics.monthlySavingsGoal}
 - Safety buffer: $${metrics.safetyBuffer}
 - Spendable cash: ${metrics.spendableCash != null ? "$" + metrics.spendableCash : "N/A"}
-- Days remaining: ${metrics.daysRemaining}
+- Days remaining: ${metrics.daysRemaining}${escrowInfo}${goalInfo}
 
-CRITICAL: When the user asks about Safe-to-Spend, spending, or budget — ALWAYS use these live numbers. NEVER recalculate from the self-reported income. These numbers already account for observed income, fixed bills, goals, buffer, and actual spending.`
+CRITICAL: When the user asks about Safe-to-Spend, spending, or budget — ALWAYS use these live numbers. NEVER recalculate from the self-reported income. These numbers already account for observed income, fixed bills, goals, buffer, escrow, and actual spending.${metrics.escrowedBills.length > 0 ? "\n\nESCROW NOTE: The daily limit is lower because I'm protecting money for an upcoming bill. Explain this proactively if the user asks why their limit changed." : ""}`
       }
     } else {
       // Check for vault statement data
@@ -478,18 +640,31 @@ This gives you real spending patterns — you don't need to ask about lifestyle 
       }
     }
 
+    const goalStatusLabel = profile.goal_status === "completed"
+      ? "COMPLETED"
+      : profile.goal_status === "paused"
+      ? "PAUSED"
+      : "active"
+    const goalProgress = profile.goal_amount
+      ? Math.min(100, Math.round(((profile.goal_saved ?? 0) / profile.goal_amount) * 100))
+      : 0
+    const pointsInfo = profile.bank_linked
+      ? `Financial Karma: ${profile.points ?? 0} pts | Streak: ${profile.points_streak ?? 0} days | Best: ${profile.longest_streak ?? 0} days`
+      : "Financial Karma: N/A (Plaid-only perk — bank not linked)"
+
     systemPrompt += `\n\n## Current User Profile (already onboarded — skip discovery, go straight to coaching)
 - Name: ${profile.name}
 - Job: ${profile.job} (${profile.income_type ?? "unknown"} income)
 - Monthly income (self-reported): $${profile.monthly_income?.toLocaleString() ?? "unknown"}
-- Goal: ${profile.goal_description ?? "not set"} — $${profile.goal_amount?.toLocaleString() ?? "?"} by ${profile.goal_deadline ?? "no deadline"} (saved: $${profile.goal_saved ?? 0})
+- Goal: ${profile.goal_description ?? "not set"} — $${profile.goal_amount?.toLocaleString() ?? "?"} by ${profile.goal_deadline ?? "no deadline"} (saved: $${profile.goal_saved ?? 0} — ${goalProgress}% — status: ${goalStatusLabel})
 - Safety buffer: $${profile.safety_buffer ?? 0} (${profile.buffer_type ?? "flat_monthly"})
 - Income calculation: ${profile.income_calc_method ?? "average"} month
 - Tax withholding: ${profile.tax_withholding ? "yes (25%)" : "no"}
 - Household: ${profile.household_type ?? "individual"}
+- ${pointsInfo}
 - Bank status: ${bankStatus}${metricsBlock}
 
-IMPORTANT: This user is already onboarded. Do NOT re-ask their name, job, income, goal, or buffer. Greet them by name and jump into coaching. Use their name occasionally to keep it personal.`
+IMPORTANT: This user is already onboarded. Do NOT re-ask their name, job, income, goal, or buffer. Greet them by name and jump into coaching.`
   } else if (profile) {
     // Partially onboarded — tell Aurora what's missing
     const collected: string[] = []
@@ -533,17 +708,24 @@ Pick up where you left off. Don't re-ask what you already know.`
   while (response.tool_calls && response.tool_calls.length > 0) {
     for (const toolCall of response.tool_calls) {
       if (toolCall.type !== "function") continue
-      if (toolCall.function.name === "save_profile_data") {
-        const args = JSON.parse(toolCall.function.arguments)
-        const result = await executeSaveProfile(userId, args)
-        if (result.success) profileUpdated = true
+      const args = JSON.parse(toolCall.function.arguments)
+      let result: Record<string, unknown>
 
-        allMessages.push({
-          role: "tool",
-          tool_call_id: toolCall.id,
-          content: JSON.stringify(result),
-        })
+      if (toolCall.function.name === "save_profile_data") {
+        result = await executeSaveProfile(userId, args)
+        if (result.success) profileUpdated = true
+      } else if (toolCall.function.name === "save_recurring_bill") {
+        result = await executeSaveRecurringBill(userId, args)
+        if (result.success) profileUpdated = true
+      } else {
+        result = { error: "Unknown function" }
       }
+
+      allMessages.push({
+        role: "tool",
+        tool_call_id: toolCall.id,
+        content: JSON.stringify(result),
+      })
     }
 
     // Get the follow-up response after tool execution

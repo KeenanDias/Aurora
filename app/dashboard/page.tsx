@@ -11,17 +11,17 @@ export default async function DashboardPage() {
   let profile: Record<string, unknown> | null = null
   const { data, error } = await getSupabase()
     .from("user_profiles")
-    .select("bank_linked, goal_description, goal_amount, goal_deadline, goal_saved, safety_buffer")
+    .select("bank_linked, goal_description, goal_amount, goal_deadline, goal_saved, goal_status, safety_buffer, points, points_streak, longest_streak")
     .eq("clerk_user_id", user?.id ?? "")
     .single()
 
   if (!error) {
     profile = data
   } else {
-    // Fallback without goal_saved if column doesn't exist yet
+    // Fallback without newer columns if they don't exist yet
     const { data: fallback } = await getSupabase()
       .from("user_profiles")
-      .select("bank_linked, goal_description, goal_amount, goal_deadline, safety_buffer")
+      .select("bank_linked, goal_description, goal_amount, goal_deadline, goal_saved, safety_buffer")
       .eq("clerk_user_id", user?.id ?? "")
       .single()
     profile = fallback
@@ -97,7 +97,11 @@ export default async function DashboardPage() {
           goalAmount={profile?.goal_amount as number | undefined}
           goalDeadline={profile?.goal_deadline as string | undefined}
           goalSaved={profile?.goal_saved as number | undefined}
+          goalStatus={profile?.goal_status as string | undefined}
           safetyBuffer={profile?.safety_buffer as number | undefined}
+          points={profile?.points as number | undefined}
+          pointsStreak={profile?.points_streak as number | undefined}
+          longestStreak={profile?.longest_streak as number | undefined}
         />
       </main>
     </div>

@@ -3,7 +3,7 @@ import type { StatementIdentity } from "./parse-statement"
 // ── Canadian institution code → Plaid institution_id mapping ─────────
 // CPA 005 standard institution numbers + known Plaid IDs
 const INSTITUTION_MAP: Record<string, { aliases: string[]; code: string }> = {
-  ins_43: { aliases: ["td", "td canada trust", "toronto-dominion"], code: "004" },
+  ins_43: { aliases: ["td", "td canada trust", "toronto-dominion", "toronto dominion"], code: "004" },
   ins_37: { aliases: ["rbc", "royal bank", "rbc royal bank", "royal bank of canada"], code: "003" },
   ins_39: { aliases: ["scotiabank", "bank of nova scotia"], code: "002" },
   ins_36: { aliases: ["bmo", "bank of montreal"], code: "001" },
@@ -56,15 +56,16 @@ function institutionNamesMatch(
   // Check against alias map using Plaid institution_id
   const entry = INSTITUTION_MAP[plaidInstitutionId]
   if (entry) {
-    if (entry.aliases.some((a) => norm.includes(a) || a.includes(norm))) {
+    if (entry.aliases.some((a) => { const na = normalize(a); return norm.includes(na) || na.includes(norm) })) {
       return true
     }
   }
 
   // Fallback: check all alias lists (statement might use a name variant)
+  const normPlaid = normalize(plaidInstitutionName)
   for (const e of Object.values(INSTITUTION_MAP)) {
-    const statementHit = e.aliases.some((a) => norm.includes(a) || a.includes(norm))
-    const plaidHit = e.aliases.some((a) => normalize(plaidInstitutionName).includes(a))
+    const statementHit = e.aliases.some((a) => { const na = normalize(a); return norm.includes(na) || na.includes(norm) })
+    const plaidHit = e.aliases.some((a) => normPlaid.includes(normalize(a)))
     if (statementHit && plaidHit) return true
   }
 
