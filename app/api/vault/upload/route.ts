@@ -82,8 +82,8 @@ export async function POST(req: NextRequest) {
     verificationStatus = "verified"
   }
 
-  // 3. Encrypt the raw PDF with AES-256-GCM
-  const { encrypted, iv, authTag } = encryptBuffer(buffer)
+  // 3. Encrypt the raw PDF with AES-256-GCM (versioned key)
+  const { encrypted, iv, authTag, keyVersion } = encryptBuffer(buffer)
 
   // 4. Store metadata + identity + encrypted blob in Supabase
   const record: Record<string, unknown> = {
@@ -93,6 +93,7 @@ export async function POST(req: NextRequest) {
     encrypted_data: encrypted,
     encryption_iv: iv,
     encryption_auth_tag: authTag,
+    key_version: keyVersion,
     period_start: parsed.periodStart,
     period_end: parsed.periodEnd,
     total_income: parsed.totalIncome,
@@ -114,11 +115,25 @@ export async function POST(req: NextRequest) {
     created_at: new Date().toISOString(),
   }
 
-  const { data, error } = await getSupabase()
+  let { data, error } = await getSupabase()
     .from("vault_uploads")
     .insert(record)
     .select("id, filename, period_start, period_end, total_income, total_spending, fixed_bills, transaction_count, created_at")
     .single()
+
+  // Graceful fallback if the migration for key_version hasn't been applied yet.
+  if (error && error.message?.includes("key_version")) {
+    console.warn("vault_uploads.key_version column missing — retrying without it. Apply sql/006 migration.")
+    const { key_version: _drop, ...legacyRecord } = record as { key_version?: number } & Record<string, unknown>
+    void _drop
+    const retry = await getSupabase()
+      .from("vault_uploads")
+      .insert(legacyRecord)
+      .select("id, filename, period_start, period_end, total_income, total_spending, fixed_bills, transaction_count, created_at")
+      .single()
+    data = retry.data
+    error = retry.error
+  }
 
   if (error) {
     console.error("Vault insert error:", error)

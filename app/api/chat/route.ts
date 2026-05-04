@@ -194,7 +194,20 @@ NEVER use robotic refusals like "I cannot answer that." Stay in character.
 - NEVER give legal, tax filing, or investment advice. Say: "I'd recommend a licensed pro for specifics. But I can help think through the big picture!"
 - NEVER be condescending about income or spending habits
 - Always end with encouragement or a clear next step
-- Always use TODAY'S DATE for any date calculations`
+- Always use TODAY'S DATE for any date calculations
+
+## Supportive Realist Tone Gate
+When the user is over budget OR has overspent today (the live metrics block below
+will explicitly say so under "TONE DIRECTIVE"), you MUST:
+
+1. Name the situation in ONE short sentence with zero judgment ("That puts you $X over today.").
+   Do NOT scold. Do NOT lecture about the past 24 hours.
+2. Pivot IMMEDIATELY to a 3-day forward recovery plan. Give a concrete daily target
+   that gets them back on track by month-end (the metrics block computes it for you).
+3. Use "we" not "you". End with a question, not a statement.
+4. Keep the whole reply under 4 sentences.
+
+When NOT over budget, ignore this gate and use your normal warm/encouraging tone.`
 
 // ── OpenAI Function Calling Tools ──────────────────────────────────────────
 const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
@@ -274,6 +287,50 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           },
         },
         required: [],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "report_spending",
+      description:
+        "Record a manual spending transaction the user just told you about. Call this whenever the user says something like \"I just spent $50 on dinner\", \"I bought groceries for $80\", \"paid $30 for gas\". Do NOT call this for hypothetical questions ('can I afford...') — only when they're reporting an actual purchase that already happened.",
+      parameters: {
+        type: "object",
+        properties: {
+          amount: {
+            type: "number",
+            description: "The dollar amount spent. Must be positive.",
+          },
+          category: {
+            type: "string",
+            enum: [
+              "FOOD_AND_DRINK",
+              "RENT_AND_UTILITIES",
+              "TRANSPORTATION",
+              "SHOPPING",
+              "ENTERTAINMENT",
+              "RECREATION",
+              "GENERAL_MERCHANDISE",
+              "PERSONAL_CARE",
+              "GENERAL_SERVICES",
+              "INSURANCE",
+              "OTHER",
+            ],
+            description: "Best-fit spending category.",
+          },
+          description: {
+            type: "string",
+            description: "Short note (e.g., 'dinner with friends', 'groceries at Loblaws'). Optional, max 200 chars.",
+          },
+          occurred_at: {
+            type: "string",
+            description: "ISO 8601 datetime the spend occurred. Defaults to now if omitted.",
+          },
+        },
+        required: ["amount"],
         additionalProperties: false,
       },
     },
@@ -375,6 +432,41 @@ async function executeSaveProfile(
   }
 
   return { success: true }
+}
+
+// ── Tool execution: record manual spending ────────────────────────────────
+async function executeReportSpending(
+  userId: string,
+  args: Record<string, unknown>
+) {
+  const amount = Number(args.amount)
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 100_000) {
+    return { success: false, error: "Invalid amount" }
+  }
+  const category = typeof args.category === "string" ? args.category : "OTHER"
+  const description = typeof args.description === "string" ? args.description.slice(0, 200) : null
+  const occurredAtRaw = typeof args.occurred_at === "string" ? args.occurred_at : null
+  const occurredAt = occurredAtRaw ? new Date(occurredAtRaw) : new Date()
+  const occurredIso = isNaN(occurredAt.getTime()) ? new Date().toISOString() : occurredAt.toISOString()
+
+  const { data, error } = await getSupabase()
+    .from("manual_transactions")
+    .insert({
+      clerk_user_id: userId,
+      amount,
+      category,
+      description,
+      occurred_at: occurredIso,
+    })
+    .select("id, amount, category, occurred_at")
+    .single()
+
+  if (error) {
+    console.error("manual_transactions insert error:", error)
+    return { success: false, error: "Failed to record transaction." }
+  }
+
+  return { success: true, transaction: data, amount, category }
 }
 
 // ── Tool execution: save recurring bill ───────────────────────────────────
@@ -598,6 +690,24 @@ export async function POST(req: NextRequest) {
         const goalInfo = metrics.goalCompleted
           ? `\n- **Goal status:** COMPLETED — stop deducting savings, celebrate!`
           : ""
+
+        // Supportive Realist gate — fires when remaining budget is gone or daily
+        // is exhausted. Computes a 3-day recovery target the LLM can quote verbatim.
+        const isOverBudget = metrics.remainingBudget < 0
+        const recoveryDays = Math.min(3, metrics.daysRemaining)
+        const recoveryDailyTarget = Math.max(
+          0,
+          Math.round(metrics.remainingBudget / Math.max(metrics.daysRemaining, 1))
+        )
+        const toneDirective = isOverBudget
+          ? `\n\n## TONE DIRECTIVE — Supportive Realist (ACTIVE)
+The user is over budget by $${Math.abs(metrics.remainingBudget)} this month. APPLY the Supportive Realist Tone Gate from the rules above:
+- Acknowledge in one short, judgment-free sentence.
+- Pivot to the 3-day recovery plan: target **$${recoveryDailyTarget}/day for the next ${recoveryDays} day${recoveryDays === 1 ? "" : "s"}** to get back on track.
+- Use "we", end with a question, ≤4 sentences total.
+- Do NOT mention past spending beyond that one acknowledgment line.`
+          : ""
+
         metricsBlock = `\n\n## Live Dashboard Metrics (from Plaid — USE THESE NUMBERS, do NOT calculate manually)
 - **Daily Safe-to-Spend: $${metrics.dailySafeToSpend}**
 - Remaining budget this month: $${metrics.remainingBudget}
@@ -609,7 +719,7 @@ export async function POST(req: NextRequest) {
 - Spendable cash: ${metrics.spendableCash != null ? "$" + metrics.spendableCash : "N/A"}
 - Days remaining: ${metrics.daysRemaining}${escrowInfo}${goalInfo}
 
-CRITICAL: When the user asks about Safe-to-Spend, spending, or budget — ALWAYS use these live numbers. NEVER recalculate from the self-reported income. These numbers already account for observed income, fixed bills, goals, buffer, escrow, and actual spending.${metrics.escrowedBills.length > 0 ? "\n\nESCROW NOTE: The daily limit is lower because I'm protecting money for an upcoming bill. Explain this proactively if the user asks why their limit changed." : ""}`
+CRITICAL: When the user asks about Safe-to-Spend, spending, or budget — ALWAYS use these live numbers. NEVER recalculate from the self-reported income. These numbers already account for observed income, fixed bills, goals, buffer, escrow, and actual spending.${metrics.escrowedBills.length > 0 ? "\n\nESCROW NOTE: The daily limit is lower because I'm protecting money for an upcoming bill. Explain this proactively if the user asks why their limit changed." : ""}${toneDirective}`
       }
     } else {
       // Check for vault statement data
@@ -697,6 +807,7 @@ Pick up where you left off. Don't re-ask what you already know.`
 
   // Track whether profile was updated so the frontend can refresh the dashboard
   let profileUpdated = false
+  let spendingUpdated = false
 
   // Handle tool calls in a loop (Aurora may call save_profile_data)
   const allMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
@@ -717,6 +828,9 @@ Pick up where you left off. Don't re-ask what you already know.`
       } else if (toolCall.function.name === "save_recurring_bill") {
         result = await executeSaveRecurringBill(userId, args)
         if (result.success) profileUpdated = true
+      } else if (toolCall.function.name === "report_spending") {
+        result = await executeReportSpending(userId, args)
+        if (result.success) spendingUpdated = true
       } else {
         result = { error: "Unknown function" }
       }
@@ -739,5 +853,5 @@ Pick up where you left off. Don't re-ask what you already know.`
     allMessages.push(response)
   }
 
-  return NextResponse.json({ message: response.content, profileUpdated })
+  return NextResponse.json({ message: response.content, profileUpdated, spendingUpdated })
 }

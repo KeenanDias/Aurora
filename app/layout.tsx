@@ -3,10 +3,12 @@ import { Geist, Geist_Mono } from 'next/font/google'
 import { ClerkProvider } from '@clerk/nextjs'
 import { dark } from '@clerk/themes'
 import { Analytics } from '@vercel/analytics/next'
+import { ThemeProvider } from '@/components/theme-provider'
+import { LenisProvider } from '@/components/lenis-provider'
 import './globals.css'
 
-const _geist = Geist({ subsets: ["latin"] });
-const _geistMono = Geist_Mono({ subsets: ["latin"] });
+const geist = Geist({ subsets: ["latin"], variable: "--font-geist-sans" })
+const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono" })
 
 export const metadata: Metadata = {
   title: 'Aurora - AI Financial Coach',
@@ -40,17 +42,20 @@ export default function RootLayout({
       appearance={{
         baseTheme: dark,
         variables: {
-          colorPrimary: '#14b8a6',
-          colorBackground: '#0b1120',
+          colorPrimary: '#10b981',
+          colorBackground: '#020617',
           colorInputBackground: '#111827',
           colorInputText: '#e2e8f0',
         },
       }}
     >
-      <html lang="en">
-        <body className="font-sans antialiased" suppressHydrationWarning>
-          {children}
-          <Analytics />
+      <html lang="en" suppressHydrationWarning className={`${geist.variable} ${geistMono.variable}`}>
+        <body suppressHydrationWarning className="font-sans antialiased min-h-screen">
+          <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+            <LenisProvider />
+            {children}
+            <Analytics />
+          </ThemeProvider>
         </body>
       </html>
     </ClerkProvider>

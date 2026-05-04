@@ -1,950 +1,1227 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
-import {
-  ArrowRight,
-  Zap,
-  Shield,
-  TrendingUp,
-  MessageSquare,
-  DollarSign,
-  Target,
-  BarChart3,
-  ChevronRight,
-  Sparkles,
-  Bell,
-  Lock,
-  Trophy,
-  Brain,
-  X,
-  Check,
-  Star,
-} from "lucide-react"
+import { useEffect, useRef, useState, useMemo } from "react"
 import Link from "next/link"
+import { motion, useScroll, useTransform, useInView, MotionValue, useSpring, AnimatePresence } from "framer-motion"
+import { useTheme } from "next-themes"
 import { useAuth } from "@clerk/nextjs"
+import { Lock, Shield, Flame, Send, Sparkles, ArrowRight, Check, MessageSquare } from "lucide-react"
+import { EarlyAccessForm } from "@/components/early-access-form"
+import { ThemeToggle } from "@/components/theme-toggle"
 
-/* ─── Kit email signup ─── */
-function KitEmailForm() {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [mounted, setMounted] = useState(false)
-
-  useEffect(() => { setMounted(true) }, [])
-
-  useEffect(() => {
-    if (mounted && containerRef.current) {
-      const existingScript = containerRef.current.querySelector("script")
-      if (!existingScript) {
-        const script = document.createElement("script")
-        script.async = true
-        script.setAttribute("data-uid", "a3573121a0")
-        script.src = "https://aurora-23.kit.com/a3573121a0/index.js"
-        containerRef.current.appendChild(script)
-      }
-    }
-  }, [mounted])
-
-  if (!mounted) return <div className="min-h-[50px]" />
-  return <div ref={containerRef} className="w-full max-w-md mx-auto" />
-}
-
-/* ─── Early‑access modal ─── */
-function EarlyAccessModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
-  useEffect(() => {
-    document.body.style.overflow = isOpen ? "hidden" : "unset"
-    return () => { document.body.style.overflow = "unset" }
-  }, [isOpen])
-
-  if (!isOpen) return null
-
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-md rounded-2xl border border-white/10 bg-[#0b1120]/95 backdrop-blur-xl p-6 shadow-2xl shadow-teal-500/10 animate-in fade-in zoom-in-95 duration-300">
-        <button onClick={onClose} className="absolute top-4 right-4 text-white/50 hover:text-white transition-colors">
-          <X className="w-5 h-5" />
-        </button>
-        <div className="text-center mb-6">
-          <div className="w-12 h-12 bg-gradient-to-br from-emerald-400 via-teal-500 to-violet-500 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-teal-500/30">
-            <span className="text-white font-bold text-lg">A</span>
-          </div>
-          <h3 className="text-2xl font-bold text-white mb-2">Join the Waitlist</h3>
-          <p className="text-white/60 text-sm">Be the first to experience Aurora and take control of your financial future.</p>
-        </div>
-        <div className="flex justify-center">
-          <KitEmailForm />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/* ─── Hooks ─── */
-function useInView(threshold = 0.1) {
-  const ref = useRef<HTMLDivElement>(null)
-  const [isInView, setIsInView] = useState(false)
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      ([entry]) => { if (entry.isIntersecting) setIsInView(true) },
-      { threshold }
-    )
-    if (ref.current) observer.observe(ref.current)
-    return () => observer.disconnect()
-  }, [threshold])
-  return { ref, isInView }
-}
-
-/* ─── Aurora background component ─── */
-function AuroraBackground({ intensity = "normal" }: { intensity?: "normal" | "intense" }) {
-  const opacityClass = intensity === "intense" ? "opacity-80" : "opacity-50"
-  return (
-    <div className={`absolute inset-0 pointer-events-none ${opacityClass}`}>
-      <div
-        className="absolute -top-1/4 left-0 w-full h-[70%]"
-        style={{
-          background: "radial-gradient(ellipse 80% 50% at 30% 20%, rgba(16,185,129,0.3) 0%, transparent 60%), radial-gradient(ellipse 60% 40% at 70% 15%, rgba(6,182,212,0.25) 0%, transparent 55%), radial-gradient(ellipse 70% 45% at 50% 10%, rgba(139,92,246,0.2) 0%, transparent 50%)",
-          animation: "aurora-shift 12s ease-in-out infinite",
-        }}
-      />
-      <div
-        className="absolute -top-1/4 left-0 w-full h-[60%]"
-        style={{
-          background: "radial-gradient(ellipse 60% 35% at 60% 25%, rgba(20,184,166,0.25) 0%, transparent 55%), radial-gradient(ellipse 50% 30% at 35% 20%, rgba(168,85,247,0.18) 0%, transparent 50%)",
-          animation: "aurora-shift-2 15s ease-in-out infinite",
-        }}
-      />
-      <div
-        className="absolute -top-1/4 left-0 w-full h-[55%]"
-        style={{
-          background: "radial-gradient(ellipse 55% 30% at 45% 18%, rgba(236,72,153,0.12) 0%, transparent 50%)",
-          animation: "aurora-shift-3 18s ease-in-out infinite",
-        }}
-      />
-    </div>
-  )
-}
-
-/* ─── Star field ─── */
-function StarField() {
-  const [stars, setStars] = useState<Array<{ left: number; top: number; delay: number; duration: number; size: number }>>([])
-
-  useEffect(() => {
-    setStars(
-      Array.from({ length: 60 }, () => ({
-        left: Math.random() * 100,
-        top: Math.random() * 100,
-        delay: Math.random() * 4,
-        duration: 2 + Math.random() * 4,
-        size: Math.random() > 0.8 ? 2 : 1,
-      }))
-    )
-  }, [])
-
-  if (stars.length === 0) return null
-
-  return (
-    <div className="absolute inset-0 pointer-events-none">
-      {stars.map((star, i) => (
-        <div
-          key={i}
-          className="absolute rounded-full bg-white/40"
-          style={{
-            left: `${star.left}%`,
-            top: `${star.top}%`,
-            width: `${star.size}px`,
-            height: `${star.size}px`,
-            animation: `twinkle ${star.duration}s ease-in-out ${star.delay}s infinite`,
-          }}
-        />
-      ))}
-    </div>
-  )
-}
-
-/* ─── Header ─── */
-function Header() {
+/**
+ * Aurora landing — a 5-scene "fly-through" the Northern Lights.
+ *
+ * Architecture:
+ *   - Single tall scroll container split into stacked scenes
+ *   - Each scene is a `sticky` viewport-height frame whose contents animate via useScroll
+ *   - A global parallax starfield drifts in the background at 3 z-depths
+ *   - Last scene morphs the theme dark → light for the "Arctic Dawn" CTA
+ */
+export default function LandingPage() {
   const { isSignedIn } = useAuth()
-  const [scrolled, setScrolled] = useState(false)
-  const [showModal, setShowModal] = useState(false)
+  const { resolvedTheme } = useTheme()
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
 
-  useEffect(() => {
-    const handleScroll = () => setScrolled(window.scrollY > 20)
-    window.addEventListener("scroll", handleScroll)
-    return () => window.removeEventListener("scroll", handleScroll)
-  }, [])
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const { scrollYProgress } = useScroll({ target: containerRef, offset: ["start start", "end end"] })
+
+  // Smoothed scroll for buttery transforms (also lets Lenis dictate feel)
+  const smooth = useSpring(scrollYProgress, { stiffness: 80, damping: 22, mass: 0.4 })
+
+  // ── Camera "Z" — drives parallax zoom into the starfield as the user scrolls
+  const cameraZ = useTransform(smooth, [0, 1], [0, 1500])
+
+  // ── Background mesh tints (dark mode only) drift over the sky as you scroll
+  const bgEmerald = useTransform(smooth, [0, 0.45], [0.55, 0.15])
+  const bgViolet = useTransform(smooth, [0.3, 0.85], [0.1, 0.55])
+  const bgTeal = useTransform(smooth, [0.1, 0.6], [0.35, 0.55])
+
+  const isDark = resolvedTheme !== "light"
 
   return (
-    <>
-      <header
-        className={`fixed top-0 left-0 right-0 z-50 transition-all duration-500 ${
-          scrolled
-            ? "bg-[#0b1120]/80 backdrop-blur-xl border-b border-white/5 shadow-lg shadow-black/20"
-            : "bg-transparent"
-        }`}
-      >
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 bg-gradient-to-br from-emerald-400 via-teal-500 to-violet-500 rounded-xl flex items-center justify-center shadow-lg shadow-teal-500/25">
-                <span className="text-white font-bold text-sm">A</span>
-              </div>
-              <span className="font-bold text-xl bg-gradient-to-r from-emerald-300 via-teal-300 to-cyan-300 bg-clip-text text-transparent">
-                Aurora
-              </span>
-            </div>
-            <nav className="hidden md:flex items-center gap-8">
-              {[
-                { href: "#problem", label: "Problem" },
-                { href: "#how-it-works", label: "How It Works" },
-                { href: "#features", label: "Features" },
-                { href: "#testimonials", label: "Testimonials" },
-              ].map((link) => (
-                <a
-                  key={link.href}
-                  href={link.href}
-                  className="text-sm text-white/50 hover:text-emerald-300 transition-colors duration-300"
-                >
-                  {link.label}
-                </a>
-              ))}
-            </nav>
-            <div className="flex items-center gap-3">
-              {isSignedIn ? (
-                <>
-                  <Link
-                    href="/dashboard"
-                    className="hidden sm:inline-flex text-sm text-white/60 hover:text-white transition-colors"
-                  >
-                    Dashboard
-                  </Link>
-                  <Link href="/sign-out">
-                    <Button
-                      size="sm"
-                      className="rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-white font-medium"
-                    >
-                      Sign out
-                    </Button>
-                  </Link>
-                </>
-              ) : (
-                <>
-                  <Link
-                    href="/sign-in"
-                    className="hidden sm:inline-flex text-sm text-white/60 hover:text-white transition-colors"
-                  >
-                    Sign in
-                  </Link>
-                  <Button
-                    size="sm"
-                    className="rounded-full bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 hover:from-emerald-400 hover:via-teal-400 hover:to-cyan-400 border-0 shadow-lg shadow-teal-500/25 text-white font-medium"
-                    onClick={() => setShowModal(true)}
-                  >
-                    Get Early Access
-                  </Button>
-                </>
-              )}
-            </div>
+    <div ref={containerRef} className="relative">
+      {/* Background is mounted-only to avoid SSR/CSR hydration mismatches */}
+      {mounted && (
+        <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
+          {isDark ? (
+            <>
+              {/* Obsidian sky */}
+              <div className="absolute inset-0 bg-[#020617]" />
+
+              {/* Drifting mesh blobs */}
+              <motion.div
+                className="absolute inset-0 will-change-[opacity]"
+                style={{
+                  background:
+                    "radial-gradient(ellipse 70% 50% at 30% 20%, rgba(16,185,129,0.6), transparent 60%)",
+                  opacity: bgEmerald,
+                }}
+              />
+              <motion.div
+                className="absolute inset-0 will-change-[opacity]"
+                style={{
+                  background:
+                    "radial-gradient(ellipse 60% 45% at 70% 35%, rgba(20,184,166,0.5), transparent 60%)",
+                  opacity: bgTeal,
+                }}
+              />
+              <motion.div
+                className="absolute inset-0 will-change-[opacity]"
+                style={{
+                  background:
+                    "radial-gradient(ellipse 70% 50% at 70% 70%, rgba(139,92,246,0.5), transparent 60%)",
+                  opacity: bgViolet,
+                }}
+              />
+
+              {/* Aurora borealis trails (greenish-blueish ribbons) */}
+              <AuroraTrails />
+
+              {/* Canvas starfield — bright, performant, no hydration concerns */}
+              <CanvasStarfield cameraZ={cameraZ} />
+            </>
+          ) : (
+            <>
+              <div
+                className="absolute inset-0"
+                style={{
+                  background:
+                    "linear-gradient(180deg, #f8fafc 0%, #eff6ff 25%, #e0f2fe 60%, #f0f9ff 100%)",
+                }}
+              />
+              <div
+                className="absolute inset-0"
+                style={{
+                  background: `
+                    radial-gradient(ellipse 65% 45% at 25% 8%, rgba(224, 242, 254, 0.85), transparent 65%),
+                    radial-gradient(ellipse 55% 40% at 80% 22%, rgba(186, 230, 253, 0.6), transparent 65%),
+                    radial-gradient(ellipse 70% 50% at 50% 100%, rgba(191, 219, 254, 0.5), transparent 70%)
+                  `,
+                }}
+              />
+              <SnowFlecks />
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="relative z-10">
+        <TopNav signedIn={!!isSignedIn} />
+        <SceneGuardian />
+        <SceneVault />
+        <ScenePulse />
+        <SceneChat />
+        <SceneDawn />
+      </div>
+    </div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Top Nav
+// ════════════════════════════════════════════════════════════════════════
+function TopNav({ signedIn }: { signedIn: boolean }) {
+  return (
+    <header className="fixed top-0 inset-x-0 z-50">
+      <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+        <Link href="/" className="flex items-center gap-2.5">
+          <div className="w-9 h-9 bg-gradient-to-br from-aurora-emerald via-aurora-teal to-aurora-violet rounded-xl flex items-center justify-center shadow-lg shadow-aurora-teal/30">
+            <span className="text-white font-bold text-sm">A</span>
           </div>
-        </div>
-      </header>
-      <EarlyAccessModal isOpen={showModal} onClose={() => setShowModal(false)} />
-    </>
-  )
-}
-
-/* ─── Hero ─── */
-function HeroSection() {
-  const { ref, isInView } = useInView()
-  const [titleIndex, setTitleIndex] = useState(0)
-  const titles = ["Early Access", "Your Future", "Financial Freedom"]
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setTitleIndex((prev) => (prev + 1) % titles.length)
-    }, 3000)
-    return () => clearInterval(interval)
-  }, [titles.length])
-
-  return (
-    <section ref={ref} className="relative pt-32 pb-24 sm:pb-32 px-4 sm:px-6 lg:px-8 overflow-hidden min-h-screen flex items-center">
-      <div className="absolute inset-0 bg-gradient-to-b from-[#040d1a] via-[#0b1120] to-[#0b1120]" />
-      <AuroraBackground intensity="intense" />
-      <StarField />
-
-      <div
-        className={`max-w-5xl mx-auto text-center relative z-10 transition-all duration-1000 ${
-          isInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-12"
-        }`}
-      >
-        <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/[0.06] backdrop-blur-sm text-emerald-300 text-sm font-medium mb-8 border border-emerald-500/20 shadow-lg shadow-emerald-500/5">
-          <Sparkles className="w-4 h-4" />
-          Now accepting early access signups
-        </div>
-
-        <div className="mb-8">
-          <h1 className="text-5xl sm:text-7xl lg:text-8xl font-bold tracking-tight text-white mb-4">
-            <span className="block text-white/90">Welcome to</span>
-            <span
-              key={titleIndex}
-              className="block bg-gradient-to-r from-emerald-300 via-teal-300 to-violet-400 bg-clip-text text-transparent animate-in fade-in slide-in-from-bottom-4 duration-700"
-            >
-              {titles[titleIndex]}
-            </span>
-          </h1>
-        </div>
-
-        <div className="flex items-center justify-center gap-3 sm:gap-5 mb-8 text-2xl sm:text-3xl lg:text-4xl font-bold text-white/80">
-          <span>Chaos</span>
-          <ChevronRight className="w-6 h-6 sm:w-8 sm:h-8 text-rose-400" />
-          <span>Control</span>
-          <ChevronRight className="w-6 h-6 sm:w-8 sm:h-8 text-teal-400" />
-          <span className="bg-gradient-to-r from-emerald-300 to-cyan-300 bg-clip-text text-transparent">Growth</span>
-        </div>
-
-        <p className="text-xl sm:text-2xl text-white/60 mb-4 font-medium">
-          We don&apos;t just track your money. We coach you on how to use it.
-        </p>
-
-        <p className="text-lg text-white/40 mb-12 max-w-2xl mx-auto text-pretty">
-          <span className="font-semibold bg-gradient-to-r from-emerald-300 via-teal-300 to-cyan-300 bg-clip-text text-transparent">Aurora</span>{" "}
-          is an AI financial coach that helps you spend smarter, stay in control, and build real wealth.
-        </p>
-
-        <div className="w-full flex justify-center">
-          <KitEmailForm />
-        </div>
-
-        <a
-          href="#problem"
-          className="inline-flex items-center gap-2 mt-10 text-sm text-white/40 hover:text-emerald-300 transition-colors group"
-        >
-          Scroll to explore
-          <ArrowRight className="w-4 h-4 rotate-90 group-hover:translate-y-1 transition-transform" />
-        </a>
-      </div>
-    </section>
-  )
-}
-
-/* ─── Problem ─── */
-function ProblemSection() {
-  const { ref, isInView } = useInView(0.2)
-  const problems = [
-    { text: "You don't know what you can safely spend", icon: DollarSign },
-    { text: "Budgeting feels overwhelming or confusing", icon: BarChart3 },
-    { text: "You track money, but nothing actually changes", icon: Target },
-    { text: "You have goals but aren't sure how to reach them", icon: TrendingUp },
-  ]
-
-  return (
-    <section id="problem" ref={ref} className="relative py-24 sm:py-32 px-4 sm:px-6 lg:px-8 overflow-hidden">
-      <div className="absolute inset-0 bg-[#0b1120]" />
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[600px] bg-gradient-to-br from-rose-500/8 via-pink-500/5 to-transparent rounded-full blur-[150px] pointer-events-none" />
-
-      <div
-        className={`max-w-4xl mx-auto text-center relative z-10 transition-all duration-1000 ${
-          isInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-12"
-        }`}
-      >
-        <h2 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-white mb-4 text-balance">
-          Most People Feel{" "}
-          <span className="bg-gradient-to-r from-rose-400 via-pink-400 to-rose-400 bg-clip-text text-transparent">
-            Out of Control
-          </span>{" "}
-          With Money
-        </h2>
-        <p className="text-lg text-white/40 mb-12 max-w-xl mx-auto">Sound familiar? You&apos;re not alone.</p>
-
-        <div className="space-y-4 mb-14">
-          {problems.map((problem, index) => (
-            <div
-              key={index}
-              className={`flex items-center gap-4 p-5 rounded-2xl bg-white/[0.03] backdrop-blur-sm border border-white/[0.06] max-w-xl mx-auto transition-all duration-700 hover:bg-white/[0.06] hover:border-rose-500/20 group ${
-                isInView ? "opacity-100 translate-x-0" : "opacity-0 -translate-x-8"
-              }`}
-              style={{ transitionDelay: `${index * 150}ms` }}
-            >
-              <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-rose-500/15 to-pink-500/15 flex items-center justify-center flex-shrink-0 border border-rose-500/20 group-hover:border-rose-500/40 transition-colors">
-                <problem.icon className="w-5 h-5 text-rose-400" />
-              </div>
-              <p className="text-left text-white/80 font-medium text-base sm:text-lg">{problem.text}</p>
-            </div>
-          ))}
-        </div>
-
-        <p className="text-2xl text-white/40 font-medium">
-          Tracking isn&apos;t enough. <span className="text-white">You need guidance.</span>
-        </p>
-      </div>
-    </section>
-  )
-}
-
-/* ─── Transformation ─── */
-function TransformationSection() {
-  const { ref, isInView } = useInView(0.2)
-  const steps = [
-    {
-      icon: Zap,
-      title: "CHAOS",
-      description: "No clarity. Overspending. Financial stress.",
-      gradient: "from-rose-400 to-pink-500",
-      glow: "shadow-rose-500/20",
-    },
-    {
-      icon: Shield,
-      title: "CONTROL",
-      description: "Know exactly what you can spend and where you stand.",
-      gradient: "from-teal-400 to-cyan-500",
-      glow: "shadow-teal-500/20",
-    },
-    {
-      icon: TrendingUp,
-      title: "GROWTH",
-      description: "Save more, invest smarter, and build wealth automatically.",
-      gradient: "from-emerald-400 to-teal-500",
-      glow: "shadow-emerald-500/20",
-    },
-  ]
-
-  return (
-    <section ref={ref} className="relative py-24 sm:py-32 px-4 sm:px-6 lg:px-8 overflow-hidden">
-      <div className="absolute inset-0 bg-[#0b1120]" />
-      <AuroraBackground />
-
-      <div
-        className={`max-w-5xl mx-auto relative z-10 transition-all duration-1000 ${
-          isInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-12"
-        }`}
-      >
-        <h2 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-white mb-4 text-center text-balance">
-          The{" "}
-          <span className="bg-gradient-to-r from-emerald-300 via-teal-300 to-cyan-300 bg-clip-text text-transparent">
-            Transformation
+          <span className="font-bold text-xl bg-gradient-to-r from-aurora-emerald via-aurora-teal to-aurora-violet bg-clip-text text-transparent">
+            Aurora
           </span>
-        </h2>
-        <p className="text-lg text-white/40 text-center mb-16 max-w-2xl mx-auto">
-          Your journey from financial stress to financial freedom
-        </p>
-
-        <div className="grid md:grid-cols-3 gap-6">
-          {steps.map((step, index) => (
-            <div
-              key={index}
-              className={`relative transition-all duration-700 ${
-                isInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-12"
-              }`}
-              style={{ transitionDelay: `${index * 200}ms` }}
-            >
-              <Card className={`h-full border-0 bg-white/[0.03] backdrop-blur-sm hover:bg-white/[0.06] transition-all duration-500 hover:scale-[1.03] group shadow-xl ${step.glow}`}>
-                <CardContent className="p-8 text-center relative overflow-hidden">
-                  <div className={`absolute inset-0 bg-gradient-to-br ${step.gradient} opacity-0 group-hover:opacity-[0.06] transition-opacity duration-500 blur-xl`} />
-                  <div className={`w-16 h-16 rounded-2xl bg-gradient-to-br ${step.gradient} flex items-center justify-center mx-auto mb-6 shadow-lg relative z-10`}>
-                    <step.icon className="w-8 h-8 text-white" />
-                  </div>
-                  <span className="text-xs font-bold tracking-widest text-white/30 relative z-10">{step.title}</span>
-                  <p className="mt-4 text-white/70 font-medium text-lg relative z-10">{step.description}</p>
-                </CardContent>
-              </Card>
-              {index < steps.length - 1 && (
-                <div className="hidden md:flex absolute top-1/2 -right-4 transform -translate-y-1/2 z-20">
-                  <ChevronRight className="w-8 h-8 text-teal-400/60" />
-                </div>
-              )}
-            </div>
-          ))}
+        </Link>
+        <div className="flex items-center gap-3">
+          <ThemeToggle />
+          <Link
+            href={signedIn ? "/dashboard" : "/sign-in"}
+            className="text-sm text-foreground/70 hover:text-foreground transition-colors"
+          >
+            {signedIn ? "Open dashboard →" : "Sign in"}
+          </Link>
         </div>
       </div>
-    </section>
+    </header>
   )
 }
 
-/* ─── How it works (chat + dashboard demo) ─── */
-function HowItWorksSection() {
-  const { ref, isInView } = useInView(0.15)
-  const [visibleMessages, setVisibleMessages] = useState<number[]>([])
-  const [isTyping, setIsTyping] = useState(false)
-  const [hasStarted, setHasStarted] = useState(false)
-  const [showDashboard, setShowDashboard] = useState(false)
-  const [animatedCategories, setAnimatedCategories] = useState<number[]>([])
-  const [safeToSpend, setSafeToSpend] = useState(0)
-  const [monthlySpent, setMonthlySpent] = useState(0)
-  const [goalProgress, setGoalProgress] = useState(0)
-
-  const conversation = [
-    { role: "ai", content: "Hey! I just connected to your bank and crunched the numbers. Ready to see where your money's been going?" },
-    { role: "user", content: "Yes! Show me what you found" },
-    { role: "ai", content: "I found 847 transactions from the last 3 months! Let me categorize these for you..." },
-    { role: "ai", content: "Here's your spending breakdown! Check out your dashboard.", showDashboard: true },
-    { role: "user", content: "Can I afford dinner out tonight?" },
-    { role: "ai", content: "You've got $127 safe-to-spend left this week. Dinner's totally doable — just maybe skip the fancy cocktails!" },
-    { role: "user", content: "How can I save more for my vacation?" },
-    { role: "ai", content: "I noticed you spend more on weekends. I'll nudge you Friday mornings! Also, you have $180/mo on subscriptions — want me to find unused ones?" },
-  ]
-
-  const spendingCategories = [
-    { emoji: "🍔", name: "Food & Dining", amount: 847, budget: 900, color: "from-orange-400 to-amber-500" },
-    { emoji: "🎉", name: "Entertainment", amount: 234, budget: 300, color: "from-pink-400 to-rose-500" },
-    { emoji: "🏠", name: "Housing", amount: 1850, budget: 1850, color: "from-blue-400 to-indigo-500" },
-    { emoji: "🚗", name: "Transport", amount: 312, budget: 400, color: "from-emerald-400 to-teal-500" },
-    { emoji: "🛍️", name: "Shopping", amount: 189, budget: 250, color: "from-violet-400 to-purple-500" },
-  ]
+// ════════════════════════════════════════════════════════════════════════
+// Canvas Starfield — 3 conceptual depth layers, twinkles + parallax zoom
+// Rendered post-mount on canvas → no hydration drift, brighter, smoother.
+// ════════════════════════════════════════════════════════════════════════
+function CanvasStarfield({ cameraZ }: { cameraZ: MotionValue<number> }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
   useEffect(() => {
-    if (showDashboard) {
-      const duration = 1500
-      const steps = 30
-      const interval = duration / steps
-      let step = 0
-      const timer = setInterval(() => {
-        step++
-        const p = step / steps
-        setSafeToSpend(Math.round(127 * p))
-        setMonthlySpent(Math.round(4187 * p))
-        setGoalProgress(Math.round(75 * p))
-        if (step >= steps) clearInterval(timer)
-      }, interval)
-      return () => clearInterval(timer)
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+
+    type Star = {
+      x: number
+      y: number
+      r: number
+      depth: 0 | 1 | 2 // 0 = far, 1 = mid, 2 = near
+      phase: number
+      twinkleSpeed: number
     }
-  }, [showDashboard])
+    let stars: Star[] = []
 
-  useEffect(() => {
-    if (!isInView || hasStarted) return
-    setHasStarted(true)
+    const populate = () => {
+      const W = canvas.width
+      const H = canvas.height
+      // Density tuned so a 1080p screen gets ~600 stars total
+      const total = Math.floor((W * H) / 4500)
+      const farCount = Math.floor(total * 0.55)
+      const midCount = Math.floor(total * 0.30)
+      const nearCount = total - farCount - midCount
 
-    let currentIndex = 0
-    const showNextMessage = () => {
-      if (currentIndex >= conversation.length) return
-      const msg = conversation[currentIndex]
-
-      if (msg.role === "ai") {
-        setIsTyping(true)
-        setTimeout(() => {
-          setIsTyping(false)
-          setVisibleMessages((prev) => [...prev, currentIndex])
-          if (msg.showDashboard) {
-            setTimeout(() => {
-              setShowDashboard(true)
-              spendingCategories.forEach((_, i) => {
-                setTimeout(() => setAnimatedCategories((prev) => [...prev, i]), i * 150)
-              })
-            }, 400)
-          }
-          currentIndex++
-          setTimeout(showNextMessage, msg.showDashboard ? 3000 : 1200)
-        }, 1500)
-      } else {
-        setVisibleMessages((prev) => [...prev, currentIndex])
-        currentIndex++
-        setTimeout(showNextMessage, 800)
+      stars = []
+      for (let i = 0; i < farCount; i++) {
+        stars.push({
+          x: Math.random() * W,
+          y: Math.random() * H,
+          r: (0.6 + Math.random() * 0.6) * dpr,
+          depth: 0,
+          phase: Math.random() * Math.PI * 2,
+          twinkleSpeed: 0.3 + Math.random() * 0.5,
+        })
+      }
+      for (let i = 0; i < midCount; i++) {
+        stars.push({
+          x: Math.random() * W,
+          y: Math.random() * H,
+          r: (1.0 + Math.random() * 0.8) * dpr,
+          depth: 1,
+          phase: Math.random() * Math.PI * 2,
+          twinkleSpeed: 0.4 + Math.random() * 0.6,
+        })
+      }
+      for (let i = 0; i < nearCount; i++) {
+        stars.push({
+          x: Math.random() * W,
+          y: Math.random() * H,
+          r: (1.6 + Math.random() * 1.4) * dpr,
+          depth: 2,
+          phase: Math.random() * Math.PI * 2,
+          twinkleSpeed: 0.5 + Math.random() * 0.7,
+        })
       }
     }
 
-    setTimeout(showNextMessage, 1000)
-  }, [isInView, hasStarted])
+    const resize = () => {
+      canvas.width = window.innerWidth * dpr
+      canvas.height = window.innerHeight * dpr
+      canvas.style.width = `${window.innerWidth}px`
+      canvas.style.height = `${window.innerHeight}px`
+      populate()
+    }
+
+    let frame = 0
+    const draw = (t: number) => {
+      const z = cameraZ.get() // 0 → 1500
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+      // Camera-Z scales each depth layer differently (parallax)
+      const cx = canvas.width / 2
+      const cy = canvas.height / 2
+
+      for (const s of stars) {
+        const layerScale = s.depth === 0 ? 1 + z * 0.0003 : s.depth === 1 ? 1 + z * 0.0009 : 1 + z * 0.002
+        // Far/mid layers fade out as we zoom past them
+        const layerFade =
+          s.depth === 0 ? Math.max(0, 1 - (z - 800) / 700) :
+          s.depth === 1 ? Math.max(0, 1 - (z - 600) / 800) :
+          1
+
+        const px = cx + (s.x - cx) * layerScale
+        const py = cy + (s.y - cy) * layerScale
+
+        if (px < -20 || px > canvas.width + 20 || py < -20 || py > canvas.height + 20) continue
+
+        const twinkle = Math.sin(t * 0.001 * s.twinkleSpeed + s.phase) * 0.4 + 0.6
+        const baseAlpha = s.depth === 0 ? 0.55 : s.depth === 1 ? 0.85 : 1
+        const alpha = baseAlpha * twinkle * layerFade
+
+        const tint =
+          s.depth === 2 ? "rgba(167, 243, 208" : // emerald-200 for foreground stars
+          s.depth === 1 ? "rgba(226, 232, 255" : // soft white-blue
+          "rgba(203, 213, 225" // far stars dimmer
+
+        if (s.depth === 0) {
+          // Far stars: simple dots
+          ctx.beginPath()
+          ctx.arc(px, py, s.r, 0, Math.PI * 2)
+          ctx.fillStyle = `${tint}, ${alpha.toFixed(3)})`
+          ctx.fill()
+        } else {
+          // Mid + near: render as proper twinkling stars with cross spikes
+          const spikeLen = s.depth === 2 ? s.r * 6 : s.r * 4
+          const spikeWidth = s.depth === 2 ? s.r * 0.45 : s.r * 0.35
+          const haloRadius = s.depth === 2 ? s.r * 3.5 : s.r * 2.2
+
+          // Soft radial halo
+          const grad = ctx.createRadialGradient(px, py, 0, px, py, haloRadius)
+          grad.addColorStop(0, `${tint}, ${(alpha * 0.55).toFixed(3)})`)
+          grad.addColorStop(0.4, `${tint}, ${(alpha * 0.18).toFixed(3)})`)
+          grad.addColorStop(1, `${tint}, 0)`)
+          ctx.fillStyle = grad
+          ctx.beginPath()
+          ctx.arc(px, py, haloRadius, 0, Math.PI * 2)
+          ctx.fill()
+
+          // Cross spikes (horizontal + vertical), brightness tied to twinkle
+          const spikeGrad = ctx.createLinearGradient(px - spikeLen, py, px + spikeLen, py)
+          spikeGrad.addColorStop(0, `${tint}, 0)`)
+          spikeGrad.addColorStop(0.5, `${tint}, ${(alpha * 0.9).toFixed(3)})`)
+          spikeGrad.addColorStop(1, `${tint}, 0)`)
+          ctx.fillStyle = spikeGrad
+          ctx.fillRect(px - spikeLen, py - spikeWidth / 2, spikeLen * 2, spikeWidth)
+
+          const spikeGradV = ctx.createLinearGradient(px, py - spikeLen, px, py + spikeLen)
+          spikeGradV.addColorStop(0, `${tint}, 0)`)
+          spikeGradV.addColorStop(0.5, `${tint}, ${(alpha * 0.9).toFixed(3)})`)
+          spikeGradV.addColorStop(1, `${tint}, 0)`)
+          ctx.fillStyle = spikeGradV
+          ctx.fillRect(px - spikeWidth / 2, py - spikeLen, spikeWidth, spikeLen * 2)
+
+          // Bright core
+          ctx.beginPath()
+          ctx.arc(px, py, s.r, 0, Math.PI * 2)
+          ctx.fillStyle = `rgba(255, 255, 255, ${alpha.toFixed(3)})`
+          ctx.fill()
+        }
+      }
+      frame = requestAnimationFrame(draw)
+    }
+
+    resize()
+    frame = requestAnimationFrame(draw)
+    window.addEventListener("resize", resize)
+    return () => {
+      cancelAnimationFrame(frame)
+      window.removeEventListener("resize", resize)
+    }
+  }, [cameraZ])
+
+  return <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Aurora Borealis Trails (dark mode) — drifting greenish-blue ribbons
+// ════════════════════════════════════════════════════════════════════════
+function AuroraTrails() {
+  return (
+    <div className="absolute inset-0 overflow-hidden">
+      {/* Three SVG ribbons, each drifting + pulsing on its own clock */}
+      <Trail
+        path="M -100 200 Q 300 80, 700 200 T 1500 180"
+        gradientId="auroraTrail1"
+        from="#34d399"
+        via="#22d3ee"
+        to="#8b5cf6"
+        duration={22}
+        delay={0}
+        topPct={18}
+        opacity={0.55}
+      />
+      <Trail
+        path="M -100 250 Q 400 120, 800 280 T 1600 220"
+        gradientId="auroraTrail2"
+        from="#10b981"
+        via="#06b6d4"
+        to="#10b981"
+        duration={28}
+        delay={4}
+        topPct={42}
+        opacity={0.4}
+      />
+      <Trail
+        path="M -100 180 Q 500 50, 900 220 T 1700 160"
+        gradientId="auroraTrail3"
+        from="#14b8a6"
+        via="#34d399"
+        to="#06b6d4"
+        duration={34}
+        delay={9}
+        topPct={68}
+        opacity={0.35}
+      />
+    </div>
+  )
+}
+
+function Trail({
+  path,
+  gradientId,
+  from,
+  via,
+  to,
+  duration,
+  delay,
+  topPct,
+  opacity,
+}: {
+  path: string
+  gradientId: string
+  from: string
+  via: string
+  to: string
+  duration: number
+  delay: number
+  topPct: number
+  opacity: number
+}) {
+  return (
+    <motion.div
+      className="absolute inset-x-0 will-change-transform"
+      style={{ top: `${topPct}%`, height: "300px", filter: "blur(28px)" }}
+      animate={{
+        x: ["-5%", "3%", "-3%", "-5%"],
+        y: [0, -16, 8, 0],
+        opacity: [opacity * 0.6, opacity, opacity * 0.7, opacity * 0.6],
+      }}
+      transition={{ duration, delay, repeat: Infinity, ease: "easeInOut" }}
+    >
+      <svg viewBox="0 0 1600 400" className="w-full h-full" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor={from} stopOpacity="0" />
+            <stop offset="25%" stopColor={from} stopOpacity="1" />
+            <stop offset="50%" stopColor={via} stopOpacity="1" />
+            <stop offset="75%" stopColor={to} stopOpacity="1" />
+            <stop offset="100%" stopColor={to} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path d={path} stroke={`url(#${gradientId})`} strokeWidth="120" strokeLinecap="round" fill="none" />
+      </svg>
+    </motion.div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// SnowFlecks (light mode) — slow, soft drifting motes
+// ════════════════════════════════════════════════════════════════════════
+function SnowFlecks() {
+  const flakes = useMemo(() => {
+    const seed = (i: number) => Math.abs((Math.sin(i * 12345) * 9999) % 1)
+    return Array.from({ length: 55 }, (_, i) => ({
+      left: seed(i) * 100,
+      delay: seed(i + 50) * 14,
+      duration: 18 + seed(i + 100) * 16,
+      size: 10 + seed(i + 150) * 18, // 10–28px crystal
+      drift: -28 + seed(i + 200) * 56,
+      sway: 8 + seed(i + 250) * 14,
+      opacity: 0.5 + seed(i + 300) * 0.45,
+      variant: Math.floor(seed(i + 350) * 3), // 0,1,2
+      spinDir: seed(i + 400) > 0.5 ? 1 : -1,
+    }))
+  }, [])
 
   return (
-    <section id="how-it-works" ref={ref} className="relative py-24 sm:py-32 px-4 sm:px-6 lg:px-8 overflow-hidden">
-      <div className="absolute inset-0 bg-[#0b1120]" />
-      <div className="absolute inset-0 opacity-30 pointer-events-none">
-        <div className="absolute top-1/4 left-0 w-[500px] h-[400px] bg-gradient-to-br from-cyan-500/20 via-blue-500/10 to-transparent rounded-full blur-[120px]" />
-        <div className="absolute bottom-1/4 right-0 w-[500px] h-[400px] bg-gradient-to-br from-teal-500/20 via-emerald-500/10 to-transparent rounded-full blur-[120px]" />
-      </div>
+    <div className="absolute inset-0 overflow-hidden">
+      {flakes.map((f, i) => {
+        const depth = f.size > 20 ? "near" : f.size > 14 ? "mid" : "far"
+        const blur = depth === "near" ? 0.4 : depth === "far" ? 0.6 : 0
+        return (
+          <motion.div
+            key={i}
+            className="absolute"
+            style={{
+              left: `${f.left}%`,
+              top: "-8%",
+              width: `${f.size}px`,
+              height: `${f.size}px`,
+              filter: `drop-shadow(0 0 4px rgba(186,230,253,0.7)) drop-shadow(0 0 8px rgba(125,211,252,0.35))${blur ? ` blur(${blur}px)` : ""}`,
+            }}
+            animate={{
+              y: ["0vh", "112vh"],
+              x: [0, f.sway, -f.sway, f.drift],
+              opacity: [0, f.opacity, f.opacity, 0],
+              rotate: [0, f.spinDir * 360],
+            }}
+            transition={{
+              duration: f.duration,
+              delay: f.delay,
+              repeat: Infinity,
+              ease: "linear",
+              times: [0, 0.15, 0.85, 1],
+            }}
+          >
+            <Snowflake variant={f.variant} />
+          </motion.div>
+        )
+      })}
+    </div>
+  )
+}
 
-      <div
-        className={`max-w-6xl mx-auto relative z-10 transition-all duration-1000 ${
-          isInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-12"
-        }`}
+function Snowflake({ variant }: { variant: number }) {
+  // Three subtly different 6-fold crystal designs
+  const stroke = "rgba(255,255,255,0.95)"
+  const accent = "rgba(219,234,254,0.85)"
+  return (
+    <svg viewBox="0 0 40 40" className="w-full h-full" fill="none">
+      <g
+        stroke={stroke}
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        transform="translate(20 20)"
       >
-        <h2 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-white mb-4 text-center text-balance">
-          How It Works
-        </h2>
-        <p className="text-lg text-white/40 text-center mb-6 max-w-2xl mx-auto">
-          <span className="font-semibold bg-gradient-to-r from-emerald-300 via-teal-300 to-cyan-300 bg-clip-text text-transparent">Aurora</span>{" "}
-          connects to your bank, learns your patterns, and proactively coaches you.
-        </p>
+        {[0, 60, 120, 180, 240, 300].map((angle) => (
+          <g key={angle} transform={`rotate(${angle})`}>
+            {/* Main spoke */}
+            <line x1="0" y1="0" x2="0" y2="-17" />
+            {variant === 0 && (
+              <>
+                {/* V-tips */}
+                <line x1="0" y1="-12" x2="-3.5" y2="-16" />
+                <line x1="0" y1="-12" x2="3.5" y2="-16" />
+                <line x1="0" y1="-7" x2="-2.5" y2="-10" />
+                <line x1="0" y1="-7" x2="2.5" y2="-10" />
+              </>
+            )}
+            {variant === 1 && (
+              <>
+                {/* Diamond + branches */}
+                <line x1="0" y1="-9" x2="-4" y2="-13" />
+                <line x1="0" y1="-9" x2="4" y2="-13" />
+                <line x1="-4" y1="-13" x2="0" y2="-17" stroke={accent} />
+                <line x1="4" y1="-13" x2="0" y2="-17" stroke={accent} />
+                <line x1="0" y1="-4" x2="-2" y2="-6" />
+                <line x1="0" y1="-4" x2="2" y2="-6" />
+              </>
+            )}
+            {variant === 2 && (
+              <>
+                {/* Feathered crystal */}
+                <line x1="0" y1="-14" x2="-3" y2="-11" />
+                <line x1="0" y1="-14" x2="3" y2="-11" />
+                <line x1="0" y1="-10" x2="-2.5" y2="-7.5" />
+                <line x1="0" y1="-10" x2="2.5" y2="-7.5" />
+                <line x1="0" y1="-6" x2="-2" y2="-4" />
+                <line x1="0" y1="-6" x2="2" y2="-4" />
+              </>
+            )}
+          </g>
+        ))}
+        {/* Center hex */}
+        <circle r="1.6" fill={stroke} stroke="none" />
+      </g>
+    </svg>
+  )
+}
 
-        {/* Security badges */}
-        <div className="flex items-center justify-center gap-4 mb-14 flex-wrap">
-          {[
-            { icon: Lock, label: "256-bit Encryption", color: "emerald" },
-            { icon: Shield, label: "Read-Only Access", color: "cyan" },
-            { icon: Lock, label: "SOC 2 Compliant", color: "violet" },
-          ].map((badge) => (
-            <div
-              key={badge.label}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-full bg-${badge.color}-500/10 border border-${badge.color}-500/20`}
+// ════════════════════════════════════════════════════════════════════════
+// Scene 1 — Guardian / Hero
+// ════════════════════════════════════════════════════════════════════════
+function SceneGuardian() {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const { scrollYProgress } = useScroll({ target: ref, offset: ["start start", "end start"] })
+
+  const phoneScale = useTransform(scrollYProgress, [0, 1], [1, 0.4])
+  const phoneOpacity = useTransform(scrollYProgress, [0, 0.7, 1], [1, 1, 0])
+  const phoneRotate = useTransform(scrollYProgress, [0, 1], [0, 12])
+  const headlineY = useTransform(scrollYProgress, [0, 1], [0, -120])
+  const headlineOpacity = useTransform(scrollYProgress, [0, 0.6], [1, 0])
+
+  return (
+    <section ref={ref} className="relative h-[200vh]">
+      <div className="sticky top-0 h-screen flex items-center justify-center px-6 overflow-hidden">
+        <div className="max-w-6xl w-full grid lg:grid-cols-[1.1fr_0.9fr] gap-12 items-center">
+          {/* Headline */}
+          <motion.div
+            style={{ y: headlineY, opacity: headlineOpacity }}
+            className="relative z-10"
+          >
+            <motion.span
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1, duration: 0.6 }}
+              className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-aurora-emerald/30 bg-aurora-emerald/[0.08] text-aurora-emerald text-xs font-medium mb-6"
             >
-              <badge.icon className={`w-3.5 h-3.5 text-${badge.color}-400`} />
-              <span className={`text-xs text-${badge.color}-300 font-medium`}>{badge.label}</span>
-            </div>
-          ))}
+              <Sparkles className="w-3 h-3" />
+              Closed beta · 50 spots
+            </motion.span>
+            <motion.h1
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.8, ease: [0.2, 0.8, 0.2, 1] }}
+              className="text-5xl sm:text-6xl lg:text-7xl font-bold leading-[1.05] tracking-tight text-foreground"
+              style={{ textShadow: "var(--heading-shadow)" }}
+            >
+              Your money needs a{" "}
+              <span className="bg-gradient-to-r from-aurora-emerald via-aurora-teal to-aurora-violet bg-clip-text text-transparent">
+                bodyguard
+              </span>
+              , not a spreadsheet.
+            </motion.h1>
+            <motion.p
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3, duration: 0.6 }}
+              className="text-lg sm:text-xl text-foreground/80 mt-6 max-w-xl leading-relaxed"
+            >
+              Aurora is an AI financial coach that stops you from blowing the rent,
+              earns you points for staying disciplined, and tells you when it&apos;s
+              actually okay to spend.
+            </motion.p>
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.5, duration: 0.6 }}
+              className="mt-8 flex flex-col sm:flex-row gap-3"
+            >
+              <Link href="#cta" className="group relative inline-flex items-center justify-center gap-2 px-7 py-3.5 rounded-full font-medium overflow-hidden">
+                <span className="absolute inset-0 bg-gradient-to-r from-aurora-emerald via-aurora-teal to-aurora-violet" />
+                <span className="absolute inset-[1px] rounded-full bg-background/85 backdrop-blur" />
+                <span className="absolute inset-0 rounded-full bg-gradient-to-r from-aurora-emerald via-aurora-teal to-aurora-violet opacity-0 group-hover:opacity-100 transition-opacity" />
+                <span className="relative flex items-center gap-2 text-foreground group-hover:text-white transition-colors">
+                  Join the closed beta
+                  <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                </span>
+              </Link>
+              <a
+                href="#chat"
+                className="inline-flex items-center justify-center gap-2 px-7 py-3.5 rounded-full border border-border text-foreground/80 font-medium hover:bg-muted/60 hover:text-foreground transition-all"
+              >
+                See it talk
+              </a>
+            </motion.div>
+          </motion.div>
+
+          {/* Phone mockup */}
+          <motion.div
+            style={{ scale: phoneScale, opacity: phoneOpacity, rotate: phoneRotate }}
+            className="relative flex justify-center"
+          >
+            <PhoneMockup />
+          </motion.div>
         </div>
 
-        <div className="grid lg:grid-cols-2 gap-8 items-start">
-          {/* Chat */}
-          <Card className="border border-white/[0.06] shadow-2xl shadow-teal-500/5 overflow-hidden bg-[#0d1525]/80 backdrop-blur-xl">
-            <CardContent className="p-0">
-              <div className="flex items-center gap-2 px-4 py-3 border-b border-white/[0.06] bg-gradient-to-r from-emerald-500/5 via-teal-500/5 to-violet-500/5">
-                <div className="w-8 h-8 bg-gradient-to-br from-emerald-400 via-teal-500 to-violet-500 rounded-lg flex items-center justify-center shadow-lg shadow-teal-500/20">
-                  <span className="text-white font-bold text-xs">A</span>
-                </div>
-                <span className="font-bold text-sm bg-gradient-to-r from-emerald-300 via-teal-300 to-cyan-300 bg-clip-text text-transparent">Aurora</span>
-                <span className="text-xs text-white/30">Your Coach</span>
-                <div className="ml-auto flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />
-                  <span className="text-[10px] text-emerald-400">Online</span>
-                </div>
-              </div>
+        <ScrollHint />
+      </div>
+    </section>
+  )
+}
 
-              <div className="p-4 space-y-3 min-h-[400px] max-h-[400px] overflow-y-auto bg-gradient-to-b from-[#0b1120]/50 to-[#0b1120]/80">
-                {conversation.map(
-                  (message, index) =>
-                    visibleMessages.includes(index) && (
-                      <div
-                        key={index}
-                        className={`flex ${message.role === "user" ? "justify-end" : "justify-start"} animate-in fade-in slide-in-from-bottom-3 duration-500`}
-                      >
-                        <div
-                          className={`max-w-[85%] px-3.5 py-2.5 rounded-2xl text-xs leading-relaxed ${
-                            message.role === "user"
-                              ? "rounded-br-md bg-gradient-to-br from-emerald-500/60 via-teal-500/50 to-cyan-500/40 border border-white/10 text-white shadow-lg shadow-teal-500/10"
-                              : "rounded-bl-md bg-white/[0.05] border border-white/[0.06] text-white/85"
-                          }`}
-                        >
-                          {message.content}
-                        </div>
-                      </div>
-                    )
-                )}
-                {isTyping && (
-                  <div className="flex justify-start animate-in fade-in duration-300">
-                    <div className="rounded-2xl rounded-bl-md border border-white/[0.06] bg-white/[0.05] px-4 py-3">
-                      <div className="flex gap-1.5">
-                        <span className="w-2 h-2 bg-teal-400/70 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                        <span className="w-2 h-2 bg-teal-400/70 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                        <span className="w-2 h-2 bg-teal-400/70 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
+function PhoneMockup() {
+  return (
+    <div className="relative w-[280px] h-[560px]">
+      {/* Glow */}
+      <div className="absolute -inset-8 bg-gradient-to-br from-aurora-emerald/30 via-aurora-teal/20 to-aurora-violet/30 rounded-[3rem] blur-3xl" />
 
-              <div className="p-3 border-t border-white/[0.04] bg-[#0b1120]/60">
-                <div className="flex items-center gap-2 px-3 py-2 rounded-xl text-white/30 text-xs border border-white/[0.04] bg-white/[0.02]">
-                  <MessageSquare className="w-3 h-3" />
-                  Chat with Aurora...
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+      {/* Phone frame */}
+      <div className="relative w-full h-full rounded-[2.5rem] border border-border bg-gradient-to-b from-white/[0.06] to-white/[0.02] backdrop-blur-xl overflow-hidden shadow-[0_30px_60px_-15px_rgba(0,0,0,0.6)]">
+        {/* Notch */}
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-6 bg-black/60 rounded-b-2xl z-10" />
 
-          {/* Dashboard */}
-          <div className={`transition-all duration-700 ${showDashboard ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
-            <Card className="border border-white/[0.06] shadow-2xl shadow-emerald-500/5 overflow-hidden bg-[#0d1525]/80 backdrop-blur-xl">
-              <CardContent className="p-0">
-                <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06] bg-gradient-to-r from-emerald-500/5 via-teal-500/5 to-cyan-500/5">
-                  <div className="flex items-center gap-2">
-                    <BarChart3 className="w-4 h-4 text-teal-400" />
-                    <span className="font-semibold text-white text-sm">Your Dashboard</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse" />
-                    <span className="text-xs text-emerald-400 font-medium">Live</span>
-                  </div>
-                </div>
+        {/* Screen content — encryption shackle loop */}
+        <div className="absolute inset-3 rounded-[2rem] bg-gradient-to-b from-obsidian via-obsidian to-[#0d1526] flex flex-col items-center justify-center p-6">
+          <ShackleAnimation />
+          <p className="text-white text-base font-medium mt-6">Securing your data</p>
+          <p className="text-muted-foreground text-xs mt-1">AES-256 · Zero-knowledge</p>
 
-                <div className="p-4 space-y-4">
-                  {/* Top widgets */}
-                  {animatedCategories.length >= 2 && (
-                    <div className="grid grid-cols-2 gap-3 animate-in fade-in duration-500">
-                      <div className="p-4 rounded-xl border border-emerald-500/10 bg-gradient-to-br from-emerald-500/[0.06] to-teal-500/[0.03]">
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className="w-7 h-7 bg-gradient-to-br from-emerald-400 to-teal-500 rounded-lg flex items-center justify-center">
-                            <DollarSign className="w-3.5 h-3.5 text-white" />
-                          </div>
-                          <p className="text-[11px] text-white/40 font-medium">Safe to Spend</p>
-                        </div>
-                        <p className="text-3xl font-bold text-emerald-400 tabular-nums">${safeToSpend}</p>
-                        <p className="text-[11px] text-white/30 mt-1">this week</p>
-                      </div>
-                      <div className="p-4 rounded-xl border border-cyan-500/10 bg-gradient-to-br from-cyan-500/[0.06] to-blue-500/[0.03]">
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className="w-7 h-7 bg-gradient-to-br from-cyan-400 to-blue-500 rounded-lg flex items-center justify-center">
-                            <BarChart3 className="w-3.5 h-3.5 text-white" />
-                          </div>
-                          <p className="text-[11px] text-white/40 font-medium">Spent This Month</p>
-                        </div>
-                        <p className="text-3xl font-bold text-cyan-400 tabular-nums">${monthlySpent.toLocaleString()}</p>
-                        <p className="text-[11px] text-white/30 mt-1">of $5,000 budget</p>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Goals */}
-                  {animatedCategories.length >= 4 && (
-                    <div className="p-4 rounded-xl border border-violet-500/10 bg-gradient-to-br from-violet-500/[0.04] to-purple-500/[0.02] animate-in fade-in slide-in-from-bottom-2 duration-500">
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-7 h-7 bg-gradient-to-br from-violet-400 to-purple-500 rounded-lg flex items-center justify-center">
-                            <Target className="w-3.5 h-3.5 text-white" />
-                          </div>
-                          <p className="text-[11px] text-white/40 font-medium">Vacation Fund</p>
-                        </div>
-                        <span className="text-xs text-violet-400 font-semibold tabular-nums">{goalProgress}%</span>
-                      </div>
-                      <div className="h-2 bg-white/[0.06] rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-gradient-to-r from-violet-400 to-purple-500 rounded-full transition-all duration-300"
-                          style={{ width: `${goalProgress}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Spending categories */}
-                  <div className="space-y-2">
-                    <p className="text-[11px] text-white/30 font-medium px-1">Spending by Category</p>
-                    {spendingCategories.map((category, index) => (
-                      <div
-                        key={index}
-                        className={`transition-all duration-500 ${
-                          animatedCategories.includes(index) ? "opacity-100 translate-x-0" : "opacity-0 -translate-x-4"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between mb-1">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-xs">{category.emoji}</span>
-                            <span className="text-[11px] text-white/70 font-medium">{category.name}</span>
-                          </div>
-                          <div className="text-right">
-                            <span className={`text-[11px] font-semibold ${category.amount > category.budget ? "text-rose-400" : "text-white/80"}`}>
-                              ${category.amount}
-                            </span>
-                            <span className="text-[11px] text-white/30"> / ${category.budget}</span>
-                          </div>
-                        </div>
-                        <div className="h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
-                          <div
-                            className={`h-full bg-gradient-to-r ${category.color} rounded-full transition-all duration-1000 ease-out`}
-                            style={{
-                              width: animatedCategories.includes(index) ? `${Math.min((category.amount / category.budget) * 100, 100)}%` : "0%",
-                              transitionDelay: `${index * 100}ms`,
-                            }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+          <div className="absolute bottom-8 left-6 right-6 space-y-2">
+            <SecurityRow label="Encrypting statement" />
+            <SecurityRow label="Verifying transit code" delay={0.6} />
+            <SecurityRow label="Sealing the vault" delay={1.2} />
           </div>
         </div>
       </div>
-    </section>
+    </div>
   )
 }
 
-/* ─── Features ─── */
-function FeaturesSection() {
-  const { ref, isInView } = useInView(0.2)
-  const features = [
-    { icon: DollarSign, title: "Real-Time Decisions", description: "Know instantly if you can afford something without breaking your budget.", gradient: "from-emerald-400 to-teal-500" },
-    { icon: Target, title: "Daily Safe-to-Spend", description: "Always know your limit. No more guessing or end-of-month surprises.", gradient: "from-cyan-400 to-blue-500" },
-    { icon: MessageSquare, title: "AI Coaching", description: "Personalized guidance based on your behavior, goals, and spending patterns.", gradient: "from-violet-400 to-purple-500" },
-    { icon: BarChart3, title: "Progress Tracking", description: "See yourself move from chaos to growth with clear visual progress.", gradient: "from-teal-400 to-emerald-500" },
-    { icon: Brain, title: "Predictive Nudges", description: "Aurora learns your patterns and sends proactive reminders before you overspend.", gradient: "from-violet-400 to-pink-500" },
-    { icon: Trophy, title: "Milestone Rewards", description: "Earn achievements as you hit savings goals and build better habits.", gradient: "from-amber-400 to-orange-500" },
-  ]
+function ShackleAnimation() {
+  return (
+    <div className="relative w-24 h-24">
+      <motion.div
+        className="absolute inset-0 flex items-center justify-center"
+        animate={{
+          scale: [1, 1.05, 1, 1.05, 1],
+        }}
+        transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+      >
+        <div className="absolute w-full h-full rounded-full bg-aurora-emerald/30 blur-2xl" />
+        <motion.div
+          animate={{ rotate: [0, -8, 0, 0, 0] }}
+          transition={{ duration: 3, repeat: Infinity, times: [0, 0.2, 0.4, 0.7, 1] }}
+          className="relative w-16 h-16 rounded-2xl bg-gradient-to-br from-aurora-emerald to-aurora-teal flex items-center justify-center shadow-lg shadow-aurora-emerald/40"
+        >
+          <Lock className="w-8 h-8 text-white" />
+        </motion.div>
+      </motion.div>
+    </div>
+  )
+}
+
+function SecurityRow({ label, delay = 0 }: { label: string; delay?: number }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: -10 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ delay, duration: 0.4 }}
+      className="flex items-center gap-2 text-[11px] text-foreground/80"
+    >
+      <motion.div
+        animate={{ scale: [1, 1.2, 1] }}
+        transition={{ duration: 1.5, repeat: Infinity, delay }}
+        className="w-1.5 h-1.5 rounded-full bg-aurora-emerald shadow-[0_0_6px_rgba(16,185,129,0.8)]"
+      />
+      {label}
+    </motion.div>
+  )
+}
+
+function ScrollHint() {
+  return (
+    <motion.div
+      animate={{ y: [0, 8, 0], opacity: [0.4, 0.8, 0.4] }}
+      transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+      className="absolute bottom-8 left-1/2 -translate-x-1/2 text-foreground/80 text-xs flex flex-col items-center gap-2"
+    >
+      Scroll to fly
+      <div className="w-5 h-8 rounded-full border border-white/30 flex items-start justify-center pt-1.5">
+        <motion.div
+          animate={{ y: [0, 8, 0] }}
+          transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+          className="w-1 h-1.5 rounded-full bg-white/80"
+        />
+      </div>
+    </motion.div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Scene 2 — Vault (Constellation of Trust)
+// ════════════════════════════════════════════════════════════════════════
+function SceneVault() {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const inView = useInView(ref, { amount: 0.5, once: false })
 
   return (
-    <section id="features" ref={ref} className="relative py-24 sm:py-32 px-4 sm:px-6 lg:px-8 overflow-hidden">
-      <div className="absolute inset-0 bg-[#0b1120]" />
-      <div className="absolute inset-0 opacity-20 pointer-events-none">
-        <div className="absolute top-1/3 left-0 w-full h-48 bg-gradient-to-r from-emerald-500/25 via-teal-500/30 to-violet-500/25 blur-[120px]" />
-      </div>
+    <section ref={ref} className="relative h-[150vh]">
+      <div className="sticky top-0 h-screen flex items-center px-6">
+        <div className="max-w-6xl mx-auto w-full grid lg:grid-cols-2 gap-16 items-center">
+          {/* Animated shield */}
+          <div className="relative flex justify-center order-2 lg:order-1">
+            <ShieldConstellation active={inView} />
+          </div>
 
-      <div
-        className={`max-w-5xl mx-auto relative z-10 transition-all duration-1000 ${
-          isInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-12"
-        }`}
-      >
-        <h2 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-white mb-4 text-center text-balance">
-          Everything You Need
-        </h2>
-        <p className="text-lg text-white/40 text-center mb-16 max-w-2xl mx-auto">
-          Powerful features designed to transform how you manage money
-        </p>
-
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
-          {features.map((feature, index) => (
-            <Card
-              key={index}
-              className={`border border-white/[0.06] bg-white/[0.02] backdrop-blur-sm hover:bg-white/[0.05] transition-all duration-500 hover:scale-[1.02] group ${
-                isInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-12"
-              }`}
-              style={{ transitionDelay: `${index * 100}ms` }}
-            >
-              <CardContent className="p-6 relative overflow-hidden">
-                <div className={`absolute inset-0 bg-gradient-to-br ${feature.gradient} opacity-0 group-hover:opacity-[0.04] transition-opacity duration-500`} />
-                <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${feature.gradient} flex items-center justify-center mb-4 shadow-lg relative z-10`}>
-                  <feature.icon className="w-6 h-6 text-white" />
-                </div>
-                <h3 className="text-lg font-semibold text-white mb-2 relative z-10">{feature.title}</h3>
-                <p className="text-sm text-white/50 relative z-10 leading-relaxed">{feature.description}</p>
-              </CardContent>
-            </Card>
-          ))}
+          {/* Copy */}
+          <motion.div
+            initial={{ opacity: 0, x: 40 }}
+            whileInView={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.7, ease: [0.2, 0.8, 0.2, 1] }}
+            viewport={{ once: false, amount: 0.4 }}
+            className="order-1 lg:order-2"
+          >
+            <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-aurora-violet/30 bg-aurora-violet/[0.08] text-aurora-violet text-xs font-medium mb-6">
+              <Shield className="w-3 h-3" />
+              The Vault
+            </span>
+            <h2 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-foreground leading-[1.05] tracking-tight"
+              style={{ textShadow: "var(--heading-shadow)" }}>
+              Bank grade by design.
+            </h2>
+            <p className="text-lg text-foreground/80 mt-6 max-w-lg leading-relaxed">
+              Statements live behind <strong className="text-foreground">AES-256 encryption</strong>.
+              Every PDF is verified against the Canadian Payment Association
+              <strong className="text-foreground"> CPA-005 standard</strong> the same one your
+              bank uses. We match the transit code on your statement before any data
+              touches the engine.
+            </p>
+            <ul className="mt-8 space-y-3">
+              <FeatureCheck text="AES-256-GCM at rest, TLS 1.3 in transit" />
+              <FeatureCheck text="Transit-code verification (TD/RBC/BMO/Scotia + more)" />
+              <FeatureCheck text="Zero-knowledge |  you can wipe everything in one click" />
+            </ul>
+          </motion.div>
         </div>
       </div>
     </section>
   )
 }
 
-/* ─── Testimonials ─── */
-function TestimonialsSection() {
-  const { ref, isInView } = useInView(0.2)
-  const testimonials = [
-    { quote: "This changed how I think about money. I finally understand where every dollar goes.", author: "Sarah M.", role: "Marketing Manager", gradient: "from-emerald-400 to-teal-500" },
-    { quote: "I finally feel in control. The AI coaching is like having a financial advisor in my pocket.", author: "James L.", role: "Software Engineer", gradient: "from-cyan-400 to-blue-500" },
-    { quote: "Went from constant overdrafts to actually saving. Aurora made it click for me.", author: "Emily R.", role: "Freelance Designer", gradient: "from-violet-400 to-purple-500" },
-    { quote: "The safe-to-spend feature alone is worth it. I never have to guess anymore.", author: "Michael T.", role: "Product Manager", gradient: "from-teal-400 to-cyan-500" },
-    { quote: "Been using it for 3 months. Already saved more than I did all last year combined.", author: "Lisa K.", role: "Teacher", gradient: "from-blue-400 to-indigo-500" },
-    { quote: "Finally an app that doesn't just track but actually helps. Game changer.", author: "David P.", role: "Startup Founder", gradient: "from-emerald-400 to-cyan-500" },
-  ]
-
+function ShieldConstellation({ active }: { active: boolean }) {
   return (
-    <section id="testimonials" ref={ref} className="relative py-24 sm:py-32 px-4 sm:px-6 lg:px-8 overflow-hidden">
-      <div className="absolute inset-0 bg-[#0b1120]" />
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[900px] h-[500px] bg-gradient-to-br from-teal-500/8 via-cyan-500/5 to-transparent rounded-full blur-[150px] pointer-events-none" />
+    <div className="relative w-[320px] h-[320px] sm:w-[400px] sm:h-[400px]">
+      {/* Halo */}
+      <motion.div
+        animate={active ? { scale: [1, 1.1, 1], opacity: [0.4, 0.7, 0.4] } : { opacity: 0.3 }}
+        transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
+        className="absolute inset-0 rounded-full bg-gradient-to-br from-aurora-emerald/30 via-aurora-violet/30 to-aurora-teal/30 blur-3xl"
+      />
 
-      <div
-        className={`max-w-5xl mx-auto relative z-10 transition-all duration-1000 ${
-          isInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-12"
-        }`}
+      {/* Shield outline that "snaps shut" */}
+      <motion.svg
+        viewBox="0 0 200 200"
+        className="absolute inset-0 w-full h-full"
+        initial={{ opacity: 0, scale: 0.8 }}
+        animate={active ? { opacity: 1, scale: 1 } : { opacity: 0.4, scale: 0.95 }}
+        transition={{ duration: 0.8, ease: [0.2, 0.8, 0.2, 1] }}
       >
-        <h2 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-white mb-14 text-center text-balance">
-          What{" "}
-          <span className="bg-gradient-to-r from-emerald-300 via-teal-300 to-cyan-300 bg-clip-text text-transparent">Early Users</span>{" "}
-          Are Saying
-        </h2>
+        <defs>
+          <linearGradient id="shieldGrad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#10b981" />
+            <stop offset="50%" stopColor="#14b8a6" />
+            <stop offset="100%" stopColor="#8b5cf6" />
+          </linearGradient>
+        </defs>
+        <motion.path
+          d="M 100 20 L 170 50 L 170 110 Q 170 160 100 185 Q 30 160 30 110 L 30 50 Z"
+          fill="none"
+          stroke="url(#shieldGrad)"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          initial={{ pathLength: 0 }}
+          animate={active ? { pathLength: 1 } : { pathLength: 0 }}
+          transition={{ duration: 1.2, ease: "easeInOut" }}
+        />
+        <motion.path
+          d="M 70 100 L 92 122 L 135 78"
+          fill="none"
+          stroke="#10b981"
+          strokeWidth="3"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          initial={{ pathLength: 0 }}
+          animate={active ? { pathLength: 1 } : { pathLength: 0 }}
+          transition={{ duration: 0.6, delay: 0.9, ease: "easeOut" }}
+          style={{ filter: "drop-shadow(0 0 8px rgba(16,185,129,0.6))" }}
+        />
+      </motion.svg>
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {testimonials.map((testimonial, index) => (
-            <Card
-              key={index}
-              className={`border border-white/[0.06] bg-white/[0.02] backdrop-blur-sm hover:bg-white/[0.05] transition-all duration-500 hover:scale-[1.02] ${
-                isInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-12"
-              }`}
-              style={{ transitionDelay: `${index * 75}ms` }}
-            >
-              <CardContent className="p-5">
-                <div className="flex gap-1 mb-3">
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <Star key={i} className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
-                  ))}
-                </div>
-                <p className="text-white/70 mb-5 leading-relaxed text-sm">&ldquo;{testimonial.quote}&rdquo;</p>
-                <div className="flex items-center gap-3">
-                  <div className={`w-9 h-9 rounded-full bg-gradient-to-br ${testimonial.gradient} flex items-center justify-center text-white font-semibold text-xs shadow-lg`}>
-                    {testimonial.author
-                      .split(" ")
-                      .map((n) => n[0])
-                      .join("")}
-                  </div>
-                  <div>
-                    <p className="font-semibold text-white text-sm">{testimonial.author}</p>
-                    <p className="text-xs text-white/30">{testimonial.role}</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+      {/* Floating bank verification badge */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={active ? { opacity: 1, y: 0 } : { opacity: 0, y: 20 }}
+        transition={{ delay: 1.4, duration: 0.5 }}
+        className="absolute bottom-0 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl bg-muted border border-border backdrop-blur-md flex items-center gap-2 shadow-xl"
+      >
+        <Check className="w-4 h-4 text-aurora-emerald" />
+        <span className="text-xs text-foreground">Transit 004 · TD verified</span>
+      </motion.div>
+    </div>
+  )
+}
+
+function FeatureCheck({ text }: { text: string }) {
+  return (
+    <li className="flex items-start gap-3 text-foreground/85">
+      <div className="w-5 h-5 mt-0.5 rounded-full bg-aurora-emerald/20 border border-aurora-emerald/40 flex items-center justify-center shrink-0">
+        <Check className="w-3 h-3 text-aurora-emerald" />
+      </div>
+      <span className="text-sm leading-relaxed">{text}</span>
+    </li>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Scene 3 — Pulse (Karma + Escrow)
+// ════════════════════════════════════════════════════════════════════════
+function ScenePulse() {
+  return (
+    <section className="relative h-[180vh]">
+      <div className="sticky top-0 h-screen flex items-center px-6">
+        <div className="max-w-6xl mx-auto w-full grid lg:grid-cols-2 gap-12 items-center">
+          <KarmaCard />
+          <EscrowCard />
         </div>
       </div>
     </section>
   )
 }
 
-/* ─── Final CTA ─── */
-function FinalCTASection() {
-  const { ref, isInView } = useInView(0.2)
-
+function KarmaCard() {
   return (
-    <section ref={ref} className="relative py-32 sm:py-40 px-4 sm:px-6 lg:px-8 overflow-hidden">
-      <div className="absolute inset-0 bg-[#0b1120]" />
-      <AuroraBackground intensity="intense" />
+    <motion.div
+      initial={{ opacity: 0, y: 40 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ amount: 0.4 }}
+      transition={{ duration: 0.7 }}
+      className="relative rounded-3xl border border-border bg-muted/40 backdrop-blur-md p-8 overflow-hidden"
+    >
+      <div className="absolute -top-20 -right-20 w-60 h-60 bg-amber-500/20 rounded-full blur-3xl" />
 
-      <div
-        className={`max-w-4xl mx-auto text-center relative z-10 transition-all duration-1000 ${
-          isInView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-12"
-        }`}
-      >
-        <h2 className="text-4xl sm:text-5xl lg:text-7xl font-bold tracking-tight text-white mb-8 text-balance">
-          Stop Guessing.{" "}
-          <span className="block mt-2 bg-gradient-to-r from-emerald-300 via-teal-300 to-violet-400 bg-clip-text text-transparent">
-            Start Taking Control.
-          </span>
-        </h2>
-        <p className="text-xl text-white/40 mb-12 max-w-xl mx-auto">
-          Join thousands transforming their relationship with money.
+      <div className="relative">
+        <div className="flex items-center gap-3 mb-6">
+          <motion.div
+            animate={{ scale: [1, 1.1, 1], rotate: [0, 4, 0] }}
+            transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+            className="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-xl shadow-orange-500/40"
+          >
+            <Flame className="w-7 h-7 text-white" />
+          </motion.div>
+          <div>
+            <span className="text-xs uppercase tracking-wider text-amber-300/80 font-semibold">Financial Karma</span>
+            <h3 className="text-2xl font-bold text-foreground">Get rewarded for discipline.</h3>
+          </div>
+        </div>
+
+        <p className="text-foreground/80 leading-relaxed mb-6">
+          Every day you stay under your Safe-to-Spend, you earn points. Hit a 7 day streak?
+          That&apos;s a bonus 50. Plaid verified only.
         </p>
 
-        <KitEmailForm />
+        <div className="space-y-2.5">
+          <KarmaRow icon="✨" label="Daily under-budget" pts="+10" />
+          <KarmaRow icon="🔥" label="7-day streak" pts="+50" />
+          <KarmaRow icon="🎯" label="Goal milestone" pts="+100" />
+          <KarmaRow icon="🛡️" label="Rainy-day saved" pts="+20" />
+        </div>
+
+        <p className="text-xs text-muted-foreground mt-6">
+          Real world gift card redemptions coming after beta.
+        </p>
       </div>
-    </section>
+    </motion.div>
   )
 }
 
-/* ─── Footer ─── */
-function Footer() {
+function KarmaRow({ icon, label, pts }: { icon: string; label: string; pts: string }) {
   return (
-    <footer className="relative py-12 px-4 sm:px-6 lg:px-8 border-t border-white/[0.06] bg-[#060d1a]">
-      <div className="max-w-6xl mx-auto">
-        <div className="flex flex-col md:flex-row items-center justify-between gap-6">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-gradient-to-br from-emerald-400 via-teal-500 to-violet-500 rounded-lg flex items-center justify-center shadow-lg shadow-teal-500/15">
-              <span className="text-white font-bold text-sm">A</span>
+    <div className="flex items-center justify-between px-4 py-3 rounded-xl bg-muted/60 border border-white/[0.06]">
+      <div className="flex items-center gap-3 text-sm text-foreground/90">
+        <span>{icon}</span>
+        {label}
+      </div>
+      <span className="text-amber-300 font-mono font-bold text-sm">{pts}</span>
+    </div>
+  )
+}
+
+function EscrowCard() {
+  // Daily limit auto-cycles to show how the bill protection works
+  const [t, setT] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setT((p) => (p + 1) % 100), 50)
+    return () => clearInterval(id)
+  }, [])
+
+  // 0–100 cycle: simulate days passing toward rent due
+  const daysUntilRent = Math.round(7 - (t / 100) * 7)
+  const escrowed = Math.min(1, t / 100) * 1500
+  const dailyLimit = 80 - (escrowed / 30) // approx, illustrative
+  const limitPct = Math.max(20, (dailyLimit / 80) * 100)
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 40 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ amount: 0.4 }}
+      transition={{ duration: 0.7, delay: 0.15 }}
+      className="relative rounded-3xl border border-border bg-muted/40 backdrop-blur-md p-8 overflow-hidden"
+    >
+      <div className="absolute -bottom-20 -left-20 w-60 h-60 bg-aurora-violet/20 rounded-full blur-3xl" />
+
+      <div className="relative">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-aurora-violet to-aurora-teal flex items-center justify-center shadow-xl shadow-aurora-violet/40">
+            <Lock className="w-7 h-7 text-white" />
+          </div>
+          <div>
+            <span className="text-xs uppercase tracking-wider text-violet-300/80 font-semibold">Big Bill Escrow</span>
+            <h3 className="text-2xl font-bold text-foreground">Rent? Already protected.</h3>
+          </div>
+        </div>
+
+        <p className="text-foreground/80 leading-relaxed mb-6">
+          Aurora escrows fixed bills before they hit. Your daily limit shrinks
+          slightly as the due date approaches so you never accidentally spend
+          rent money on takeout.
+        </p>
+
+        {/* Live demo */}
+        <div className="rounded-2xl bg-foreground/[0.04] border border-border p-5 space-y-4">
+          <div className="flex justify-between text-xs text-foreground/80">
+            <span>Rent due in <span className="text-foreground font-semibold">{daysUntilRent}d</span></span>
+            <span>${Math.round(escrowed)} escrowed</span>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-baseline justify-between">
+              <span className="text-foreground/80 text-xs">Daily Safe-to-Spend</span>
+              <span className="text-foreground font-bold text-lg">${Math.round(dailyLimit)}</span>
             </div>
-            <div>
-              <span className="font-bold bg-gradient-to-r from-emerald-300 via-teal-300 to-cyan-300 bg-clip-text text-transparent">Aurora</span>
-              <p className="text-sm text-white/30">AI Financial Coach</p>
+            <div className="relative h-2 rounded-full bg-muted overflow-hidden">
+              <motion.div
+                className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-aurora-emerald via-aurora-teal to-aurora-violet"
+                animate={{ width: `${limitPct}%` }}
+                transition={{ duration: 0.3, ease: "easeOut" }}
+              />
             </div>
           </div>
-          <p className="text-sm text-white/30">{`\u00A9 ${new Date().getFullYear()} Aurora. All rights reserved.`}</p>
+
+          <div className="text-xs text-aurora-emerald flex items-center gap-1.5">
+            <Lock className="w-3 h-3" />
+            $1,500 of your rent is locked, untouchable.
+          </div>
         </div>
-        <div className="mt-8 pt-6 border-t border-white/[0.04]">
-          <p className="text-xs text-white/20 text-center leading-relaxed max-w-4xl mx-auto">
-            This website and any information provided by our AI financial coach are for educational and informational purposes only. We do not provide financial, investment, or legal advice. Any suggestions or insights are not personalized financial advice and should not be relied upon as a substitute for consulting with a qualified professional. You are responsible for your own financial decisions.
+      </div>
+    </motion.div>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Scene 4 — Cleo-style auto-typing chat
+// ════════════════════════════════════════════════════════════════════════
+const CHAT_SCRIPT = [
+  { role: "user" as const, text: "Can I afford this $70 dinner?" },
+  {
+    role: "aurora" as const,
+    text:
+      "Your Safe-to-Spend is **$120** today, and I've already escrowed your rent. Go for it — you've got a 5-day streak! 🔥",
+  },
+  { role: "user" as const, text: "What if I push it to $90?" },
+  {
+    role: "aurora" as const,
+    text:
+      "Still safe. You'd land at **$30 left** for the day. Just no Uber home — water it 😉",
+  },
+]
+
+function SceneChat() {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const inView = useInView(ref, { amount: 0.4, once: false })
+
+  return (
+    <section ref={ref} id="chat" className="relative h-[150vh]">
+      <div className="sticky top-0 h-screen flex items-center px-6">
+        <div className="max-w-6xl mx-auto w-full grid lg:grid-cols-[1fr_1.1fr] gap-16 items-center">
+          {/* Copy */}
+          <motion.div
+            initial={{ opacity: 0, x: -30 }}
+            whileInView={{ opacity: 1, x: 0 }}
+            viewport={{ amount: 0.4 }}
+            transition={{ duration: 0.7 }}
+          >
+            <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-aurora-teal/30 bg-aurora-teal/[0.08] text-aurora-teal text-xs font-medium mb-6">
+              <MessageSquare className="w-3 h-3" />
+              The Coach
+            </span>
+            <h2 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-foreground leading-[1.05] tracking-tight"
+              style={{ textShadow: "var(--heading-shadow)" }}>
+              Talk to it like a friend who&apos;s really good with money.
+            </h2>
+            <p className="text-lg text-foreground/80 mt-6 max-w-xl leading-relaxed">
+              Aurora mirrors how you talk. Drop a question and get a real answer,
+              no jargon, no shame, no &quot;please review your spending habits&quot; emails.
+            </p>
+          </motion.div>
+
+          <ChatDemo active={inView} />
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function ChatDemo({ active }: { active: boolean }) {
+  const [messages, setMessages] = useState<{ role: "user" | "aurora"; text: string; complete: boolean }[]>([])
+  const [typing, setTyping] = useState(false)
+
+  useEffect(() => {
+    if (!active) {
+      setMessages([])
+      setTyping(false)
+      return
+    }
+    let cancelled = false
+    const run = async () => {
+      for (let i = 0; i < CHAT_SCRIPT.length; i++) {
+        if (cancelled) return
+        const m = CHAT_SCRIPT[i]
+        if (m.role === "aurora") {
+          setTyping(true)
+          await wait(900)
+          if (cancelled) return
+          setTyping(false)
+        }
+        // User messages appear instantly; Aurora messages stream in
+        if (m.role === "user") {
+          setMessages((prev) => [...prev, { ...m, complete: true }])
+          await wait(700)
+        } else {
+          setMessages((prev) => [...prev, { ...m, complete: false, text: "" }])
+          for (let c = 1; c <= m.text.length; c++) {
+            if (cancelled) return
+            await wait(18 + Math.random() * 14)
+            setMessages((prev) => {
+              const copy = [...prev]
+              copy[copy.length - 1] = { ...copy[copy.length - 1], text: m.text.slice(0, c) }
+              return copy
+            })
+          }
+          setMessages((prev) => {
+            const copy = [...prev]
+            copy[copy.length - 1] = { ...copy[copy.length - 1], complete: true }
+            return copy
+          })
+          await wait(900)
+        }
+      }
+    }
+    run()
+    return () => {
+      cancelled = true
+    }
+  }, [active])
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: 30, scale: 0.96 }}
+      whileInView={{ opacity: 1, x: 0, scale: 1 }}
+      viewport={{ amount: 0.4 }}
+      transition={{ duration: 0.7 }}
+      className="relative w-full max-w-md mx-auto rounded-3xl border border-border bg-gradient-to-b from-white/[0.04] to-white/[0.01] backdrop-blur-xl overflow-hidden shadow-2xl"
+    >
+      <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-aurora-emerald via-aurora-teal to-aurora-violet" />
+      {/* Header */}
+      <div className="flex items-center gap-3 px-5 py-4 border-b border-border">
+        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-aurora-emerald via-aurora-teal to-aurora-violet flex items-center justify-center shadow-lg shadow-aurora-teal/30">
+          <Sparkles className="w-4 h-4 text-white" />
+        </div>
+        <div>
+          <p className="text-foreground text-sm font-semibold">Aurora</p>
+          <p className="text-[11px] text-aurora-emerald flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-aurora-emerald animate-pulse" />
+            Online
           </p>
         </div>
       </div>
-    </footer>
+
+      {/* Messages */}
+      <div className="px-5 py-5 space-y-3 min-h-[380px]">
+        <AnimatePresence>
+          {messages.map((m, i) => (
+            <motion.div
+              key={i}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3 }}
+              className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+            >
+              <div
+                className={`max-w-[85%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
+                  m.role === "user"
+                    ? "bg-gradient-to-br from-aurora-emerald/30 to-aurora-teal/30 border border-aurora-emerald/30 text-foreground rounded-br-sm"
+                    : "bg-muted border border-border text-foreground rounded-bl-sm"
+                }`}
+                dangerouslySetInnerHTML={{
+                  __html: m.text.replace(
+                    /\*\*(.+?)\*\*/g,
+                    '<strong class="text-aurora-emerald font-semibold">$1</strong>'
+                  ),
+                }}
+              />
+            </motion.div>
+          ))}
+          {typing && (
+            <motion.div
+              key="typing"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="flex justify-start"
+            >
+              <div className="bg-muted border border-border rounded-2xl rounded-bl-sm px-4 py-3 flex gap-1.5">
+                {[0, 1, 2].map((i) => (
+                  <motion.span
+                    key={i}
+                    animate={{ y: [0, -3, 0] }}
+                    transition={{ duration: 0.8, repeat: Infinity, delay: i * 0.15 }}
+                    className="w-1.5 h-1.5 rounded-full bg-aurora-teal"
+                  />
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* Faux input */}
+      <div className="px-5 pb-5">
+        <div className="flex items-center gap-2 rounded-full bg-muted/60 border border-border px-4 py-2.5">
+          <span className="text-muted-foreground/70 text-sm flex-1">Ask Aurora anything...</span>
+          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-aurora-emerald to-aurora-teal flex items-center justify-center">
+            <Send className="w-3.5 h-3.5 text-white" />
+          </div>
+        </div>
+      </div>
+    </motion.div>
   )
 }
 
-/* ─── Page ─── */
-export default function LandingPage() {
-  useEffect(() => {
-    document.documentElement.style.scrollBehavior = "smooth"
-    return () => { document.documentElement.style.scrollBehavior = "auto" }
-  }, [])
+function wait(ms: number) {
+  return new Promise((r) => setTimeout(r, ms))
+}
 
+// ════════════════════════════════════════════════════════════════════════
+// Scene 5 — Arctic Dawn CTA
+// ════════════════════════════════════════════════════════════════════════
+function SceneDawn() {
   return (
-    <div className="min-h-screen bg-[#0b1120]">
-      <Header />
-      <main>
-        <HeroSection />
-        <ProblemSection />
-        <TransformationSection />
-        <HowItWorksSection />
-        <FeaturesSection />
-        <TestimonialsSection />
-        <FinalCTASection />
-      </main>
-      <Footer />
-    </div>
+    <section id="cta" className="relative h-[100vh]">
+      <div className="sticky top-0 h-screen flex items-center justify-center px-6">
+        <div className="max-w-3xl text-center relative z-10">
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ amount: 0.4 }}
+            transition={{ duration: 0.8 }}
+          >
+            <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-amber-500/40 bg-amber-100/70 dark:bg-amber-500/[0.08] text-amber-700 dark:text-amber-300 text-xs font-medium mb-6 shadow-sm">
+              <Sparkles className="w-3 h-3" />
+              The closed beta opens this season
+            </span>
+            <h2 className="text-5xl sm:text-6xl lg:text-7xl font-bold text-foreground leading-[1.05] tracking-tight"
+              style={{ textShadow: "var(--heading-shadow)" }}>
+              Claim 1 of <span className="bg-gradient-to-r from-amber-500 via-aurora-emerald to-aurora-violet bg-clip-text text-transparent">50 spots</span>.
+            </h2>
+            <p className="text-lg text-foreground/80 mt-6 max-w-xl mx-auto leading-relaxed">
+              Drop your email below we&apos;ll review and email you when your spot
+              opens. No spam, no marketing list rentals.
+            </p>
+
+            <div className="mt-10 max-w-xl mx-auto">
+              <EarlyAccessForm source="landing-dawn" />
+            </div>
+
+            <p className="text-xs text-muted-foreground mt-8">
+              Already approved?{" "}
+              <Link href="/sign-in" className="text-aurora-teal hover:underline font-medium">
+                Sign in →
+              </Link>
+            </p>
+          </motion.div>
+        </div>
+      </div>
+
+      {/* Footer */}
+      <footer className="relative bg-background/80 backdrop-blur-xl border-t border-border">
+        <div className="max-w-6xl mx-auto px-6 py-10 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-muted-foreground">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 bg-gradient-to-br from-aurora-emerald via-aurora-teal to-aurora-violet rounded-md" />
+            <span className="font-semibold text-foreground">Aurora</span>
+            <span className="text-muted-foreground/70">— money with a bodyguard.</span>
+          </div>
+          <div className="flex items-center gap-5">
+            <Link href="/sign-in" className="hover:text-foreground transition-colors">Sign in</Link>
+            <a href="mailto:hello@aurora.app" className="hover:text-foreground transition-colors">Contact</a>
+            <span className="text-muted-foreground/70">© {new Date().getFullYear()}</span>
+          </div>
+        </div>
+      </footer>
+    </section>
   )
 }

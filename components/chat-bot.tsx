@@ -27,6 +27,18 @@ const DEFAULT_SIZE = { width: 400, height: 560 }
 const MIN_SIZE = { width: 320, height: 400 }
 const MAX_SIZE = { width: 700, height: 800 }
 
+// Cross-component / cross-tab dashboard sync. Listeners live in DashboardMetrics.
+function broadcast(payload: { type: "spending-updated" | "profile-updated" | "vault-updated" }) {
+  if (typeof window === "undefined" || typeof BroadcastChannel === "undefined") return
+  try {
+    const ch = new BroadcastChannel("aurora")
+    ch.postMessage(payload)
+    ch.close()
+  } catch {
+    // ignore — fallback handlers (window events / global refresh) still fire
+  }
+}
+
 export function ChatBot() {
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
@@ -144,10 +156,13 @@ export function ChatBot() {
 
       if (data.profileUpdated) {
         window.dispatchEvent(new Event("aurora-profile-updated"))
+        broadcast({ type: "profile-updated" })
+      }
+      if (data.spendingUpdated) {
+        broadcast({ type: "spending-updated" })
       }
 
-      // Always refresh dashboard metrics after any chat response
-      // (spending may have changed since last fetch)
+      // Legacy fallback for any listeners still on the window pointer
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const refresh = (window as any).__refreshDashboardMetrics
       if (typeof refresh === "function") refresh()
@@ -246,6 +261,8 @@ export function ChatBot() {
       // Notify dashboard vault + metrics
       window.dispatchEvent(new Event("aurora-vault-updated"))
       window.dispatchEvent(new Event("aurora-profile-updated"))
+      broadcast({ type: "vault-updated" })
+      broadcast({ type: "profile-updated" })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const refresh = (window as any).__refreshDashboardMetrics
       if (typeof refresh === "function") refresh()
@@ -333,11 +350,11 @@ export function ChatBot() {
             {isLoading && unreadCount === 0 && (
               <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-4 w-4 bg-emerald-400 border-2 border-[#0b1120]" />
+                <span className="relative inline-flex rounded-full h-4 w-4 bg-emerald-400 border-2 border-background" />
               </span>
             )}
             {unreadCount > 0 && (
-              <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-5 h-5 px-1 rounded-full bg-red-500 border-2 border-[#0b1120] text-[10px] font-bold text-white">
+              <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-5 h-5 px-1 rounded-full bg-red-500 border-2 border-background text-[10px] font-bold text-white">
                 {unreadCount}
               </span>
             )}
@@ -373,7 +390,7 @@ export function ChatBot() {
               right: 24,
               zIndex: 50,
             }}
-            className="flex flex-col rounded-2xl border border-white/10 bg-[#0b1120] shadow-2xl shadow-black/40 overflow-hidden"
+            className="flex flex-col rounded-2xl border border-border bg-background shadow-2xl shadow-black/40 overflow-hidden"
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
@@ -388,11 +405,11 @@ export function ChatBot() {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  className="absolute inset-0 z-30 rounded-2xl bg-[#0b1120]/90 backdrop-blur-sm border-2 border-dashed border-teal-500/50 flex flex-col items-center justify-center gap-3"
+                  className="absolute inset-0 z-30 rounded-2xl bg-background/90 backdrop-blur-sm border-2 border-dashed border-teal-500/50 flex flex-col items-center justify-center gap-3"
                 >
                   <Paperclip className="w-8 h-8 text-teal-400" />
-                  <p className="text-sm text-white/70 font-medium">Drop your bank statement here</p>
-                  <p className="text-xs text-white/30">PDF files only</p>
+                  <p className="text-sm text-foreground/80 font-medium">Drop your bank statement here</p>
+                  <p className="text-xs text-muted-foreground/70">PDF files only</p>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -404,7 +421,7 @@ export function ChatBot() {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  className="absolute inset-0 z-30 rounded-2xl bg-[#0b1120]/95 backdrop-blur-xl flex items-center justify-center"
+                  className="absolute inset-0 z-30 rounded-2xl bg-background/95 backdrop-blur-xl flex items-center justify-center"
                 >
                   <SecurityLoader status={uploadStatus} fileName={uploadFileName} />
                 </motion.div>
@@ -415,24 +432,24 @@ export function ChatBot() {
             <div
               onPointerDown={(e) => dragControls.start(e)}
               onDoubleClick={handleDoubleClick}
-              className="flex items-center justify-between p-3 px-4 border-b border-white/[0.06] cursor-grab active:cursor-grabbing select-none shrink-0 bg-gradient-to-r from-[#0b1120] via-[#0d1526] to-[#0b1120]"
+              className="flex items-center justify-between p-3 px-4 border-b border-border/60 cursor-grab active:cursor-grabbing select-none shrink-0 bg-gradient-to-r from-card via-card to-card"
             >
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 bg-gradient-to-br from-emerald-400 via-teal-500 to-violet-500 rounded-xl flex items-center justify-center shadow-lg shadow-teal-500/25">
+                <div className="w-8 h-8 bg-gradient-to-br from-aurora-emerald via-aurora-teal to-aurora-violet rounded-xl flex items-center justify-center shadow-lg shadow-aurora-teal/25">
                   <Sparkles className="w-3.5 h-3.5 text-white" />
                 </div>
                 <div>
-                  <p className="text-white text-sm font-semibold leading-tight">Aurora AI</p>
-                  <p className="text-[11px] text-white/35">Your financial coach</p>
+                  <p className="text-foreground text-sm font-semibold leading-tight">Aurora AI</p>
+                  <p className="text-[11px] text-muted-foreground">Your financial coach</p>
                 </div>
               </div>
               <div className="flex items-center gap-1">
-                <GripHorizontal className="w-4 h-4 text-white/20 mr-1" />
+                <GripHorizontal className="w-4 h-4 text-muted-foreground/50 mr-1" />
                 <button
                   onClick={() => setOpen(false)}
-                  className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-white/10 transition-colors"
+                  className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-muted transition-colors"
                 >
-                  <X className="w-4 h-4 text-white/50" />
+                  <X className="w-4 h-4 text-muted-foreground" />
                 </button>
               </div>
             </div>
@@ -447,7 +464,7 @@ export function ChatBot() {
                         A
                       </AvatarFallback>
                     </Avatar>
-                    <div className="bg-white/[0.05] border border-white/[0.08] rounded-2xl px-4 py-3 flex gap-1.5 items-center">
+                    <div className="bg-muted/60 border border-border/60 rounded-2xl px-4 py-3 flex gap-1.5 items-center">
                       <span className="w-2 h-2 rounded-full bg-teal-400/60 animate-bounce [animation-delay:0ms]" />
                       <span className="w-2 h-2 rounded-full bg-teal-400/60 animate-bounce [animation-delay:150ms]" />
                       <span className="w-2 h-2 rounded-full bg-teal-400/60 animate-bounce [animation-delay:300ms]" />
@@ -466,7 +483,7 @@ export function ChatBot() {
                           className={
                             msg.role === "assistant"
                               ? "bg-gradient-to-br from-emerald-400 via-teal-500 to-violet-500 text-white text-xs font-bold"
-                              : "bg-white/10 text-white/70 text-xs font-medium"
+                              : "bg-muted text-foreground/80 text-xs font-medium"
                           }
                         >
                           {msg.role === "assistant" ? "A" : "U"}
@@ -476,8 +493,8 @@ export function ChatBot() {
                       <div
                         className={`max-w-[85%] w-full rounded-2xl px-4 py-3 text-sm ${
                           msg.role === "user"
-                            ? "bg-gradient-to-br from-emerald-500/20 to-teal-500/20 border border-emerald-500/20 text-white"
-                            : "bg-white/[0.05] border border-white/[0.08] text-white/90"
+                            ? "bg-gradient-to-br from-aurora-emerald/20 to-aurora-teal/20 border border-aurora-emerald/30 text-foreground"
+                            : "bg-muted/60 border border-border/60 text-foreground"
                         }`}
                       >
                         {msg.role === "assistant" ? (
@@ -490,7 +507,7 @@ export function ChatBot() {
                                   </p>
                                 ),
                                 strong: ({ children }) => (
-                                  <strong className="font-semibold text-white">
+                                  <strong className="font-semibold text-foreground">
                                     {children}
                                   </strong>
                                 ),
@@ -533,7 +550,7 @@ export function ChatBot() {
                         A
                       </AvatarFallback>
                     </Avatar>
-                    <div className="bg-white/[0.05] border border-white/[0.08] rounded-2xl px-4 py-3 flex gap-1.5 items-center">
+                    <div className="bg-muted/60 border border-border/60 rounded-2xl px-4 py-3 flex gap-1.5 items-center">
                       <span className="w-2 h-2 rounded-full bg-teal-400/60 animate-bounce [animation-delay:0ms]" />
                       <span className="w-2 h-2 rounded-full bg-teal-400/60 animate-bounce [animation-delay:150ms]" />
                       <span className="w-2 h-2 rounded-full bg-teal-400/60 animate-bounce [animation-delay:300ms]" />
@@ -545,7 +562,7 @@ export function ChatBot() {
             </ScrollArea>
 
             {/* Input area */}
-            <div className="shrink-0 p-3 pt-2 border-t border-white/[0.06]">
+            <div className="shrink-0 p-3 pt-2 border-t border-border/60">
               <input
                 ref={fileInputRef}
                 type="file"
@@ -561,7 +578,7 @@ export function ChatBot() {
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   disabled={isLoading || !!uploadStatus}
-                  className="flex items-center justify-center w-10 h-10 rounded-lg border border-white/10 text-white/40 hover:text-teal-400 hover:border-teal-500/30 hover:bg-teal-500/[0.05] transition-all disabled:opacity-30 disabled:pointer-events-none shrink-0"
+                  className="flex items-center justify-center w-10 h-10 rounded-lg border border-border text-muted-foreground hover:text-teal-400 hover:border-teal-500/30 hover:bg-teal-500/[0.05] transition-all disabled:opacity-30 disabled:pointer-events-none shrink-0"
                   title="Upload bank statement (PDF)"
                 >
                   <Paperclip className="w-4 h-4" />
@@ -573,7 +590,7 @@ export function ChatBot() {
                   onKeyDown={handleKeyDown}
                   placeholder="Ask Aurora anything..."
                   disabled={isLoading}
-                  className="flex-1 bg-white/[0.05] border-white/10 text-white placeholder:text-white/30 focus-visible:ring-teal-500/30 focus-visible:border-teal-500/50"
+                  className="flex-1 bg-muted/60 border-border text-foreground placeholder:text-muted-foreground/70 focus-visible:ring-aurora-teal/30 focus-visible:border-aurora-teal/50"
                 />
                 <Button
                   size="icon"
@@ -584,7 +601,7 @@ export function ChatBot() {
                   <Send className="w-4 h-4" />
                 </Button>
               </div>
-              <p className="text-[10px] text-white/20 mt-1.5 text-center">
+              <p className="text-[10px] text-muted-foreground/50 mt-1.5 text-center">
                 Aurora AI may make mistakes. Verify important financial decisions.
               </p>
             </div>
@@ -598,7 +615,7 @@ export function ChatBot() {
                 width="12"
                 height="12"
                 viewBox="0 0 12 12"
-                className="absolute bottom-1 left-1 text-white/20 group-hover:text-teal-400/60 transition-colors"
+                className="absolute bottom-1 left-1 text-muted-foreground/50 group-hover:text-teal-400/60 transition-colors"
               >
                 <line x1="0" y1="12" x2="12" y2="0" stroke="currentColor" strokeWidth="1.5" />
                 <line x1="0" y1="12" x2="7" y2="5" stroke="currentColor" strokeWidth="1.5" />

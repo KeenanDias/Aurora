@@ -106,9 +106,14 @@ export function calculateSafeToSpend(params: {
     monthlySavingsGoal = params.goalAmount / monthsRemaining
   }
 
-  // ── Escrow: Big Bill Protection ────────────────────────────────────
-  // If a known bill is due within 7 days, "protect" that money
+  // ── Escrow: Big Bill Protection (Weighted Ramp) ────────────────────
+  // Bite scales as the due date approaches: weight = 1 - (daysUntilDue / 7).
+  // Day-of (daysUntilDue=0) → full bite. 7 days out → 0 bite.
+  // We subtract weightedEscrowBite from the daily limit directly so the
+  // pressure shows up where it should — in the next few days, not spread
+  // thin across the whole month.
   let escrowTotal = 0
+  let weightedEscrowBite = 0
   const escrowedBills: { name: string; amount: number; dueDate: string }[] = []
   if (params.upcomingBills && params.upcomingBills.length > 0) {
     for (const bill of params.upcomingBills) {
@@ -116,23 +121,26 @@ export function calculateSafeToSpend(params: {
       const daysUntilDue = Math.ceil((dueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
       if (daysUntilDue >= 0 && daysUntilDue <= 7) {
         escrowTotal += bill.amount
+        const weight = 1 - daysUntilDue / 7
+        weightedEscrowBite += bill.amount * weight
         escrowedBills.push({ name: bill.name, amount: bill.amount, dueDate: bill.dueDate })
       }
     }
   }
 
-  // Total monthly obligations — includes safety buffer + escrow
-  const monthlyObligations =
-    fixedBills + monthlySavingsGoal + params.safetyBuffer
+  // Total monthly obligations — includes safety buffer (escrow handled separately below)
+  const monthlyObligations = fixedBills + monthlySavingsGoal + params.safetyBuffer
 
-  // What's left for the whole month
+  // What's left for the whole month (escrow still subtracted at full amount —
+  // that money truly is unavailable, but the daily ramp determines how the
+  // pain is distributed across the next 7 days)
   const monthlyAvailable = effectiveIncome - monthlyObligations
-
-  // Subtract what's already been spent + escrowed upcoming bills
   const remainingBudget = monthlyAvailable - spentThisMonth - escrowTotal
 
-  // Daily amount
-  const dailySafeToSpend = remainingBudget / daysRemaining
+  // Daily amount — base divides remaining by days, then applies the ramp bite.
+  // This makes the daily limit shrink hardest the day before a bill is due.
+  const baseDaily = (monthlyAvailable - spentThisMonth) / daysRemaining
+  const dailySafeToSpend = baseDaily - weightedEscrowBite
 
   // Liquidity: Spendable Cash from actual account balances
   let spendableCash: number | null = null
@@ -159,6 +167,43 @@ export function calculateSafeToSpend(params: {
     visualSpendableCash = spendableCash - params.safetyBuffer - escrowTotal
   }
 
+  // ── Coaching: goal pacing + spending pacing ───────────────────────
+  // "Expected saved by now" = goalAmount * (months elapsed / total months)
+  let goalPacing: {
+    onTrack: boolean
+    expectedSavedByNow: number
+    actualSaved: number
+    shortfall: number
+  } | null = null
+  if (params.goalAmount && params.goalDeadline && !goalCompleted) {
+    const deadline = new Date(params.goalDeadline)
+    const totalMonths = Math.max(
+      1,
+      (deadline.getFullYear() - now.getFullYear()) * 12 +
+        (deadline.getMonth() - now.getMonth()) +
+        Math.ceil(dayOfMonth / daysInMonth)
+    )
+    const monthlyTarget = params.goalAmount / totalMonths
+    const monthFraction = dayOfMonth / daysInMonth
+    const expectedSavedByNow = monthlyTarget * monthFraction
+    const actualSaved = params.goalSaved ?? 0
+    goalPacing = {
+      onTrack: actualSaved >= expectedSavedByNow,
+      expectedSavedByNow: Math.round(expectedSavedByNow * 100) / 100,
+      actualSaved,
+      shortfall: Math.max(0, Math.round((expectedSavedByNow - actualSaved) * 100) / 100),
+    }
+  }
+
+  // ── Placeholder state (Ghost-Town fix) ─────────────────────────────
+  // True when there's literally nothing to compute from — no income signal,
+  // no vault data, no linked accounts. Caller should render a Setup Pending
+  // card instead of stark $0 numbers.
+  const isPlaceholder =
+    effectiveIncome === 0 &&
+    !params.vaultMetrics &&
+    (!params.accounts || params.accounts.length === 0)
+
   return {
     dailySafeToSpend: Math.max(0, Math.round(dailySafeToSpend * 100) / 100),
     remainingBudget: Math.round(remainingBudget * 100) / 100,
@@ -172,9 +217,11 @@ export function calculateSafeToSpend(params: {
     visualSpendableCash: visualSpendableCash != null ? Math.round(visualSpendableCash * 100) / 100 : null,
     checkingTotal: Math.round(checkingTotal * 100) / 100,
     creditCardDebt: Math.round(creditCardDebt * 100) / 100,
-    // New fields
     goalCompleted,
     escrowTotal: Math.round(escrowTotal * 100) / 100,
+    weightedEscrowBite: Math.round(weightedEscrowBite * 100) / 100,
     escrowedBills,
+    goalPacing,
+    isPlaceholder,
   }
 }
