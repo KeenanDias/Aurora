@@ -4,6 +4,7 @@ import OpenAI from "openai"
 import { getSupabase } from "@/lib/supabase"
 import { plaidClient } from "@/lib/plaid"
 import { calculateSafeToSpend } from "@/lib/safe-to-spend"
+import { fetchActiveGoals } from "@/lib/enrolled-goals"
 import type { AccountBalance } from "@/lib/safe-to-spend"
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -165,6 +166,50 @@ Ask about lifestyle spending naturally (eating out, activities, shopping, subscr
 - If they mention a purchase, quickly check if it fits their daily limit
 - Keep responses concise (2-4 sentences for simple, more for breakdowns)
 - If spending is off-track: "Heads up — that would put you $X over. Want to adjust?"
+
+## Handling "I Don't Know" — Open-Ended Question Strategy
+Many users genuinely don't know the answer to direct questions like "what's
+your monthly take-home?" or "what's your goal amount?" — especially gig
+workers, students, or anyone who's never tracked their finances closely.
+
+When a user signals uncertainty ("I don't know", "I'm not sure", "no idea",
+"depends", a long pause, a vague answer like "a few hundred"), DO NOT push
+for a number. Instead, pivot to open-ended scaffolding questions that let
+them arrive at the answer themselves:
+
+**Income unknown:**
+- "No worries — what does a typical pay cycle look like? Weekly, bi-weekly, monthly?"
+- "Roughly what hits your account on a good week vs. a slow week?"
+- "What's the last deposit you remember? Even a ballpark works."
+- Then: "Cool, so on an average month that puts you somewhere around $X — sound right?"
+
+**Goal amount unknown:**
+- "Forget the dollar amount for a sec — what's the *thing* you'd love to do or buy?"
+- "When you picture having this goal hit, what does it look like? A car, a trip, just breathing room?"
+- "Is there a deadline that matters — like a date you'd want to be ready by?"
+- Then suggest a number: "For most people that runs around $X — want to start there and adjust later?"
+
+**Bills/spending unknown:**
+- "What did you spend money on yesterday? Just walk me through it."
+- "Which bill stresses you out most when it hits?"
+- "Any subscriptions you've been meaning to cancel?"
+
+**Buffer unknown:**
+- "Picture an unexpected $200 expense tomorrow — would that wreck you, or could you absorb it?"
+- "What's the smallest cushion that would let you sleep at night?"
+
+**Rules for this mode:**
+- Ask ONE open question at a time. Never stack two.
+- After their answer, REFLECT back what you heard before computing or saving.
+- Once they've given you enough context to estimate, propose a number with
+  "around" or "roughly" — never present it as fact: "Sounds like ~$3,200/mo
+  — want me to go with that and we can fine-tune later?"
+- Only call save_profile_data once they confirm or correct your estimate.
+- If they're still stuck after 2-3 scaffolding questions, offer to skip:
+  "We can come back to this — want to set up the bank link first and let
+  me see your actual numbers?"
+
+This is the difference between feeling interrogated and feeling coached.
 
 ## Domain Constraint
 You are a specialized Financial Coach. You do not provide information on topics outside of personal finance, budgeting, banking, saving, spending, debt, and wealth-building.
@@ -370,67 +415,96 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
 ]
 
 // ── Tool execution: save to Supabase ───────────────────────────────────────
+// Uses UPDATE-if-exists, INSERT-otherwise. Avoids the upsert NOT-NULL trap
+// where Postgres runs the INSERT path's column checks before the ON CONFLICT
+// resolution kicks in — which was causing "null value in column name/job"
+// errors whenever the LLM only filled in some fields.
 async function executeSaveProfile(
   userId: string,
   args: Record<string, unknown>
 ) {
-  // Build an update object with only the fields that were provided
-  const update: Record<string, unknown> = {
-    clerk_user_id: userId,
-    updated_at: new Date().toISOString(),
+  // Build a payload of only the fields the LLM actually provided this turn.
+  const fields: Record<string, unknown> = {}
+  if (args.name) fields.name = args.name
+  if (args.job) fields.job = args.job
+  if (args.income_type) fields.income_type = args.income_type
+  if (args.monthly_income) fields.monthly_income = args.monthly_income
+  if (args.goal_description) fields.goal_description = args.goal_description
+  if (args.goal_amount) fields.goal_amount = args.goal_amount
+  if (args.goal_deadline) fields.goal_deadline = args.goal_deadline
+  if (args.safety_buffer != null) fields.safety_buffer = args.safety_buffer
+  if (args.buffer_type) fields.buffer_type = args.buffer_type
+  if (args.income_calc_method) fields.income_calc_method = args.income_calc_method
+  if (typeof args.tax_withholding === "boolean") fields.tax_withholding = args.tax_withholding
+  if (args.household_type) fields.household_type = args.household_type
+  if (typeof args.goal_saved === "number") fields.goal_saved = args.goal_saved
+  if (args.goal_status) fields.goal_status = args.goal_status
+  if (args.phone_number) fields.phone_number = args.phone_number
+
+  // Bail early if the LLM called the tool with no meaningful fields.
+  if (Object.keys(fields).length === 0) {
+    return { success: true, noop: true }
   }
 
-  if (args.name) update.name = args.name
-  if (args.job) update.job = args.job
-  if (args.income_type) update.income_type = args.income_type
-  if (args.monthly_income) update.monthly_income = args.monthly_income
-  if (args.goal_description) update.goal_description = args.goal_description
-  if (args.goal_amount) update.goal_amount = args.goal_amount
-  if (args.goal_deadline) update.goal_deadline = args.goal_deadline
-  if (args.safety_buffer) update.safety_buffer = args.safety_buffer
-  if (args.buffer_type) update.buffer_type = args.buffer_type
-  if (args.income_calc_method) update.income_calc_method = args.income_calc_method
-  if (typeof args.tax_withholding === "boolean") update.tax_withholding = args.tax_withholding
-  if (args.household_type) update.household_type = args.household_type
-  if (typeof args.goal_saved === "number") update.goal_saved = args.goal_saved
-  if (args.goal_status) update.goal_status = args.goal_status
-  if (args.phone_number) update.phone_number = args.phone_number
+  const supabase = getSupabase()
 
-  // Check if all Core 5 are collected to mark onboarded
-  const { data: existing } = await getSupabase()
+  // Check whether a row already exists. We need a couple of columns for the
+  // Core-5 onboarded check; a missing row throws PGRST116 which we treat as
+  // "doesn't exist."
+  const { data: existing, error: lookupError } = await supabase
     .from("user_profiles")
     .select("name, job, monthly_income, goal_amount, safety_buffer")
     .eq("clerk_user_id", userId)
-    .single()
+    .maybeSingle()
 
-  const merged = { ...existing, ...update }
-  if (merged.name && merged.job && merged.monthly_income && merged.goal_amount != null && merged.safety_buffer != null) {
-    update.onboarded = true
+  if (lookupError && lookupError.code !== "PGRST116") {
+    console.error("user_profiles lookup error:", lookupError)
+    return { success: false, error: lookupError.message }
   }
 
-  const { error } = await getSupabase()
-    .from("user_profiles")
-    .upsert(update, { onConflict: "clerk_user_id" })
+  // Compute merged Core-5 state to decide whether to flip onboarded=true.
+  const merged = { ...(existing ?? {}), ...fields }
+  const coreFiveDone =
+    merged.name &&
+    merged.job &&
+    merged.monthly_income &&
+    merged.goal_amount != null &&
+    merged.safety_buffer != null
 
-  if (error) {
-    // If goal_saved column doesn't exist yet, retry without it
-    if (error.message?.includes("goal_saved") && update.goal_saved !== undefined) {
-      console.warn("goal_saved column missing, retrying without it")
-      const fallbackUpdate = { ...update }
-      delete fallbackUpdate.goal_saved
-      const { error: retryError } = await getSupabase()
-        .from("user_profiles")
-        .upsert(fallbackUpdate, { onConflict: "clerk_user_id" })
-      if (retryError) {
-        console.error("Supabase save error (retry):", retryError)
-        return { success: false, error: retryError.message }
-      }
-      return { success: true, goal_saved_skipped: true }
+  const payload: Record<string, unknown> = {
+    ...fields,
+    updated_at: new Date().toISOString(),
+  }
+  if (coreFiveDone) payload.onboarded = true
+
+  // Run the write — UPDATE if a row exists, INSERT otherwise. NOT-NULL columns
+  // already populated stay populated on update. Includes a fallback that drops
+  // `goal_saved` if the column hasn't been added to the table yet.
+  const write = async (p: Record<string, unknown>) => {
+    if (existing) {
+      const { error } = await supabase.from("user_profiles").update(p).eq("clerk_user_id", userId)
+      return error
     }
+    const { error } = await supabase.from("user_profiles").insert({ clerk_user_id: userId, ...p })
+    return error
+  }
+
+  let error = await write(payload)
+  if (error?.message?.includes("goal_saved") && payload.goal_saved !== undefined) {
+    console.warn("goal_saved column missing, retrying without it")
+    const fallback = { ...payload }
+    delete fallback.goal_saved
+    error = await write(fallback)
+    if (error) {
+      console.error("Supabase save error (retry):", error)
+      return { success: false, error: error.message }
+    }
+    return { success: true, goal_saved_skipped: true }
+  }
+  if (error) {
     console.error("Supabase save error:", error)
     return { success: false, error: error.message }
   }
-
   return { success: true }
 }
 
@@ -618,6 +692,7 @@ async function fetchLiveMetrics(profile: Record<string, unknown>) {
     // Fetch upcoming bills for escrow
     const upcomingBills = await fetchUpcomingBills(profile.clerk_user_id as string, now)
 
+    const activeGoals = await fetchActiveGoals(profile.clerk_user_id as string)
     const sts = calculateSafeToSpend({
       monthlyIncome: incomeUsed,
       fixedBills,
@@ -625,6 +700,7 @@ async function fetchLiveMetrics(profile: Record<string, unknown>) {
       goalDeadline: profile.goal_deadline as string | null,
       goalStatus: (profile.goal_status as "active" | "completed" | "paused") ?? "active",
       goalSaved: (profile.goal_saved as number) ?? 0,
+      activeGoals,
       safetyBuffer: (profile.safety_buffer as number) ?? 0,
       spentThisMonth: discretionary,
       taxWithholding: (profile.tax_withholding as boolean) ?? false,

@@ -28,7 +28,16 @@ const MIN_SIZE = { width: 320, height: 400 }
 const MAX_SIZE = { width: 700, height: 800 }
 
 // Cross-component / cross-tab dashboard sync. Listeners live in DashboardMetrics.
-function broadcast(payload: { type: "spending-updated" | "profile-updated" | "vault-updated" }) {
+type BroadcastPayload =
+  | { type: "spending-updated" }
+  | { type: "profile-updated" }
+  | { type: "vault-updated" }
+  | { type: "intent-progress"; intent: string }
+  | { type: "intent-cancel"; intent: string }
+  | { type: "goal-created"; goalId?: string }
+  | { type: "goal-updated"; goalId?: string }
+
+function broadcast(payload: BroadcastPayload) {
   if (typeof window === "undefined" || typeof BroadcastChannel === "undefined") return
   try {
     const ch = new BroadcastChannel("aurora")
@@ -38,6 +47,25 @@ function broadcast(payload: { type: "spending-updated" | "profile-updated" | "va
     // ignore — fallback handlers (window events / global refresh) still fire
   }
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Scripted flows — bypass the LLM for fast, deterministic interactions
+// triggered from the dashboard (e.g. the "Add Goal" card).
+// ──────────────────────────────────────────────────────────────────────
+type AddGoalState = {
+  intent: "ADD_GOAL"
+  step: "name" | "amount" | "deadline" | "saving"
+  collected: { description?: string; amount?: number; deadline?: string }
+}
+type EditGoalState = {
+  intent: "EDIT_GOAL"
+  step: "field" | "amount" | "deadline" | "saving"
+  goalId: string
+  goalDescription: string
+  field?: "amount" | "deadline"
+  collected: { amount?: number; deadline?: string | null }
+}
+type ScriptedFlow = AddGoalState | EditGoalState | null
 
 export function ChatBot() {
   const [open, setOpen] = useState(false)
@@ -50,6 +78,16 @@ export function ChatBot() {
   const [uploadStatus, setUploadStatus] = useState<"uploading" | "encrypting" | "secure" | null>(null)
   const [uploadFileName, setUploadFileName] = useState("")
   const [isDragging, setIsDragging] = useState(false)
+  const [scriptedFlow, setScriptedFlow] = useState<ScriptedFlow>(null)
+  const scriptedFlowRef = useRef<ScriptedFlow>(null)
+  useEffect(() => {
+    scriptedFlowRef.current = scriptedFlow
+  }, [scriptedFlow])
+  // Pending file for "Upload anyway" after a verification mismatch.
+  const [pendingMismatch, setPendingMismatch] = useState<{
+    file: File
+    failures: string[]
+  } | null>(null)
 
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -121,6 +159,362 @@ export function ChatBot() {
     }
   }, [])
 
+  // Push an Aurora message after a typing-dots beat.
+  const pushAuroraTyped = useCallback(async (text: string, delay = 700) => {
+    setIsLoading(true)
+    await new Promise((r) => setTimeout(r, delay))
+    setIsLoading(false)
+    addMessage({ id: `s-${Date.now()}-${Math.random()}`, role: "assistant", content: text })
+  }, [addMessage])
+
+  // Kick off the ADD_GOAL scripted flow.
+  const startAddGoalFlow = useCallback(async () => {
+    // Drop the welcome bubble so the script feels like a fresh task.
+    setMessages((prev) => prev.filter((m) => m.id !== "welcome"))
+    setScriptedFlow({ intent: "ADD_GOAL", step: "name", collected: {} })
+    setOpen(true)
+    broadcast({ type: "intent-progress", intent: "ADD_GOAL" })
+    await pushAuroraTyped(
+      "Hey! Ready to set a new target? **What are we saving for?**\n\n*(e.g., A new PC, a flight to Tokyo, or an Emergency Fund.)*",
+      400
+    )
+  }, [pushAuroraTyped])
+
+  // Kick off the EDIT_GOAL scripted flow for an existing goal.
+  const startEditGoalFlow = useCallback(
+    async (goalId: string, goalDescription: string) => {
+      setMessages((prev) => prev.filter((m) => m.id !== "welcome"))
+      setScriptedFlow({
+        intent: "EDIT_GOAL",
+        step: "field",
+        goalId,
+        goalDescription,
+        collected: {},
+      })
+      setOpen(true)
+      broadcast({ type: "intent-progress", intent: "EDIT_GOAL" })
+      await pushAuroraTyped(
+        `Let's tweak **${goalDescription}**. What do you want to change — the **amount** or the **deadline**?`,
+        400
+      )
+    },
+    [pushAuroraTyped]
+  )
+
+  // Listen for cross-component intent triggers (e.g. dashboard "Add Goal" card).
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof BroadcastChannel === "undefined") return
+    const ch = new BroadcastChannel("aurora")
+    const handler = (e: MessageEvent) => {
+      const t = e.data?.type
+      if (t === "trigger-intent" && e.data?.intent === "ADD_GOAL") {
+        // Don't restart if already mid-flow.
+        if (scriptedFlowRef.current?.intent === "ADD_GOAL") {
+          setOpen(true)
+          return
+        }
+        startAddGoalFlow()
+      }
+      if (t === "trigger-intent" && e.data?.intent === "EDIT_GOAL" && e.data?.goalId) {
+        if (scriptedFlowRef.current?.intent === "EDIT_GOAL") {
+          setOpen(true)
+          return
+        }
+        startEditGoalFlow(String(e.data.goalId), String(e.data.goalDescription ?? "this goal"))
+      }
+      if (t === "intent-cancel" && (e.data?.intent === "ADD_GOAL" || e.data?.intent === "EDIT_GOAL")) {
+        if (scriptedFlowRef.current?.intent === e.data.intent) {
+          setScriptedFlow(null)
+          pushAuroraTyped("All good — we'll skip that for now. Ping me when you're ready.", 300)
+        }
+      }
+    }
+    ch.addEventListener("message", handler)
+    return () => {
+      ch.removeEventListener("message", handler)
+      ch.close()
+    }
+  }, [startAddGoalFlow, startEditGoalFlow, pushAuroraTyped])
+
+  // Try to parse a date out of free text. Accepts ISO, "by Aug 2026",
+  // "December 31", and "in N months/weeks".
+  const parseDeadline = useCallback((raw: string): string | null => {
+    const text = raw.trim().toLowerCase()
+    const now = new Date()
+
+    // "in N months" / "in N weeks" / "in N days"
+    const rel = text.match(/in\s+(\d+)\s+(day|week|month|year)s?/)
+    if (rel) {
+      const n = parseInt(rel[1], 10)
+      const unit = rel[2]
+      const d = new Date(now)
+      if (unit === "day") d.setDate(d.getDate() + n)
+      if (unit === "week") d.setDate(d.getDate() + n * 7)
+      if (unit === "month") d.setMonth(d.getMonth() + n)
+      if (unit === "year") d.setFullYear(d.getFullYear() + n)
+      return d.toISOString().slice(0, 10)
+    }
+
+    // Direct Date.parse fallback
+    const parsed = new Date(raw)
+    if (!isNaN(parsed.getTime()) && parsed.getTime() > Date.now() - 1000 * 60 * 60 * 24) {
+      return parsed.toISOString().slice(0, 10)
+    }
+    return null
+  }, [])
+
+  // Handle one user reply within the ADD_GOAL flow. Returns true if handled.
+  const handleScriptedAddGoal = useCallback(
+    async (userText: string): Promise<boolean> => {
+      const flow = scriptedFlowRef.current
+      if (!flow || flow.intent !== "ADD_GOAL") return false
+
+      if (flow.step === "name") {
+        const description = userText.trim()
+        if (description.length < 2) {
+          await pushAuroraTyped("Just a few words about the goal — what should we call it?", 350)
+          return true
+        }
+        setScriptedFlow({ ...flow, step: "amount", collected: { ...flow.collected, description } })
+        await pushAuroraTyped(
+          `Love it — **${description}**.\n\nHow much do we need? Just the number (e.g., \`5000\`).`,
+          500
+        )
+        return true
+      }
+
+      if (flow.step === "amount") {
+        const cleaned = userText.replace(/[^0-9.]/g, "")
+        const amount = Number(cleaned)
+        if (!Number.isFinite(amount) || amount <= 0) {
+          await pushAuroraTyped("That doesn't look like a dollar amount. Try a number like `2500`.", 350)
+          return true
+        }
+        if (amount > 10_000_000) {
+          await pushAuroraTyped("Whoa — let's keep this under $10M. Try a smaller number?", 350)
+          return true
+        }
+        setScriptedFlow({ ...flow, step: "deadline", collected: { ...flow.collected, amount } })
+        await pushAuroraTyped(
+          `Got it — **$${amount.toLocaleString()}**.\n\nWhen do you want to hit it by? You can say a date (\`Dec 2026\`) or a window (\`in 8 months\`). Or type **skip** if there's no deadline.`,
+          500
+        )
+        return true
+      }
+
+      if (flow.step === "deadline") {
+        let deadline: string | null = null
+        const skip = /^(skip|none|no deadline|nope)/i.test(userText.trim())
+        if (!skip) {
+          deadline = parseDeadline(userText)
+          if (!deadline) {
+            await pushAuroraTyped(
+              "I couldn't read that as a date. Try something like `Dec 2026`, `2027-01-15`, or `in 6 months`. Or `skip` to leave it open.",
+              400
+            )
+            return true
+          }
+        }
+
+        const collected = { ...flow.collected, deadline: deadline ?? undefined }
+        setScriptedFlow({ ...flow, step: "saving", collected })
+        await pushAuroraTyped("Saving it now…", 250)
+
+        try {
+          const res = await fetch("/api/goals", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              description: collected.description,
+              amount: collected.amount,
+              deadline: collected.deadline ?? null,
+            }),
+          })
+          const data = await res.json()
+          if (!res.ok) throw new Error(data.error || "Save failed")
+
+          broadcast({ type: "goal-created", goalId: data.goal?.id })
+          broadcast({ type: "profile-updated" })
+
+          await pushAuroraTyped(
+            `**Done!** Your new goal is lined up on the dashboard.${
+              deadline
+                ? ` We'll pace it to hit by ${new Date(deadline).toLocaleDateString("en-US", { month: "long", year: "numeric" })}.`
+                : ""
+            } Want to add another, or jump back to coaching?`,
+            550
+          )
+        } catch (err) {
+          await pushAuroraTyped(
+            `Hmm, I hit a snag saving that${err instanceof Error ? `: ${err.message}` : ""}. Want to try again?`,
+            350
+          )
+          broadcast({ type: "intent-cancel", intent: "ADD_GOAL" })
+        }
+        setScriptedFlow(null)
+        return true
+      }
+
+      return false
+    },
+    [parseDeadline, pushAuroraTyped]
+  )
+
+  // Handle EDIT_GOAL replies. Same pattern as ADD_GOAL but routes through
+  // PATCH /api/goals/[id].
+  const handleScriptedEditGoal = useCallback(
+    async (userText: string): Promise<boolean> => {
+      const flow = scriptedFlowRef.current
+      if (!flow || flow.intent !== "EDIT_GOAL") return false
+
+      const text = userText.trim()
+      const tLower = text.toLowerCase()
+
+      // Universal escape — bail out of the flow cleanly at any step.
+      if (/^(cancel|nevermind|never mind|stop|exit|forget it|abort)$/i.test(tLower)) {
+        setScriptedFlow(null)
+        await pushAuroraTyped(
+          "All good — leaving that one alone. Let me know if you want to come back to it.",
+          300
+        )
+        return true
+      }
+
+      if (flow.step === "field") {
+        const t = tLower
+        let field: "amount" | "deadline" | null =
+          /amount|money|dollar|much|cost|price/.test(t) ? "amount" :
+          /deadline|date|when|time|by/.test(t) ? "deadline" : null
+
+        // Smart fallbacks — if the user skipped the keyword and just typed
+        // a number or a date directly, jump to the right branch with it.
+        if (!field) {
+          const looksLikeMoney = /^\$?\s?\d{1,3}(?:[,]\d{3})*(\.\d+)?$|^\$?\d+(?:\.\d+)?$/.test(text)
+          const parsedAsDate = parseDeadline(text)
+          if (looksLikeMoney) {
+            field = "amount"
+          } else if (parsedAsDate) {
+            field = "deadline"
+          }
+        }
+
+        if (!field) {
+          await pushAuroraTyped(
+            "I just need to know which to change — type **amount** or **deadline**.\n\n*(Or type **cancel** if you'd rather skip this.)*",
+            350
+          )
+          return true
+        }
+
+        if (field === "amount") {
+          // If the user already typed a number, validate + save immediately.
+          if (/\d/.test(text)) {
+            const cleaned = text.replace(/[^0-9.]/g, "")
+            const amount = Number(cleaned)
+            if (Number.isFinite(amount) && amount > 0 && amount <= 10_000_000) {
+              setScriptedFlow({ ...flow, step: "saving", field, collected: { amount } })
+              await pushAuroraTyped(`Updating to **$${amount.toLocaleString()}**…`, 250)
+              await commitEditGoal(flow.goalId, { amount })
+              return true
+            }
+          }
+          setScriptedFlow({ ...flow, step: "amount", field })
+          await pushAuroraTyped("Got it. What's the new target dollar amount?", 400)
+        } else {
+          // If the user already typed a date, advance immediately.
+          const directDate = parseDeadline(text)
+          if (directDate) {
+            setScriptedFlow({ ...flow, step: "saving", field, collected: { deadline: directDate } })
+            await pushAuroraTyped(
+              `Updating deadline to **${new Date(directDate).toLocaleDateString("en-US", { month: "long", year: "numeric" })}**…`,
+              250
+            )
+            await commitEditGoal(flow.goalId, { deadline: directDate })
+            return true
+          }
+          setScriptedFlow({ ...flow, step: "deadline", field })
+          await pushAuroraTyped(
+            "Cool — when do you want to hit it by? A date (`Dec 2026`) or a window (`in 8 months`).",
+            400
+          )
+        }
+        return true
+      }
+
+      if (flow.step === "amount") {
+        const cleaned = userText.replace(/[^0-9.]/g, "")
+        const amount = Number(cleaned)
+        if (!Number.isFinite(amount) || amount <= 0) {
+          await pushAuroraTyped("That doesn't look like a dollar amount. Try a number like `7500`.", 350)
+          return true
+        }
+        if (amount > 10_000_000) {
+          await pushAuroraTyped("Whoa — let's keep this under $10M. Try a smaller number?", 350)
+          return true
+        }
+        setScriptedFlow({ ...flow, step: "saving", collected: { amount } })
+        await pushAuroraTyped("Updating…", 250)
+        await commitEditGoal(flow.goalId, { amount })
+        return true
+      }
+
+      if (flow.step === "deadline") {
+        const deadline = parseDeadline(userText)
+        if (!deadline) {
+          await pushAuroraTyped(
+            "I couldn't read that as a date. Try `Dec 2026`, `2027-01-15`, or `in 6 months`.",
+            400
+          )
+          return true
+        }
+        setScriptedFlow({ ...flow, step: "saving", collected: { deadline } })
+        await pushAuroraTyped("Updating…", 250)
+        await commitEditGoal(flow.goalId, { deadline })
+        return true
+      }
+
+      return false
+    },
+    // commitEditGoal is defined just below — set as a ref-like via closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [parseDeadline, pushAuroraTyped]
+  )
+
+  const commitEditGoal = useCallback(
+    async (goalId: string, patch: { amount?: number; deadline?: string | null }) => {
+      try {
+        const res = await fetch(`/api/goals/${goalId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || "Update failed")
+
+        broadcast({ type: "goal-updated", goalId })
+        broadcast({ type: "profile-updated" })
+
+        await pushAuroraTyped(
+          `**Done!** ${
+            patch.amount != null
+              ? `New target is **$${patch.amount.toLocaleString()}**.`
+              : patch.deadline
+              ? `New deadline is **${new Date(patch.deadline).toLocaleDateString("en-US", { month: "long", year: "numeric" })}**.`
+              : "Goal updated."
+          } Anything else?`,
+          550
+        )
+      } catch (err) {
+        await pushAuroraTyped(
+          `Hmm, I hit a snag updating that${err instanceof Error ? `: ${err.message}` : ""}. Want to try again?`,
+          350
+        )
+      }
+      setScriptedFlow(null)
+    },
+    [pushAuroraTyped]
+  )
+
   const handleSend = async () => {
     const trimmed = input.trim()
     if (!trimmed || isLoading) return
@@ -129,6 +523,20 @@ export function ChatBot() {
       id: Date.now().toString(),
       role: "user",
       content: trimmed,
+    }
+
+    // If a scripted flow is active, intercept before hitting the LLM.
+    if (scriptedFlowRef.current) {
+      setMessages((prev) => [...prev, userMessage])
+      setInput("")
+      const intent = scriptedFlowRef.current.intent
+      const handled =
+        intent === "ADD_GOAL"
+          ? await handleScriptedAddGoal(trimmed)
+          : intent === "EDIT_GOAL"
+          ? await handleScriptedEditGoal(trimmed)
+          : false
+      if (handled) return
     }
 
     const updatedMessages = [
@@ -191,7 +599,7 @@ export function ChatBot() {
     }
   }
 
-  const handleFileUpload = useCallback(async (file: File) => {
+  const handleFileUpload = useCallback(async (file: File, force = false) => {
     if (file.type !== "application/pdf") {
       addMessage({
         id: Date.now().toString(),
@@ -227,6 +635,7 @@ export function ChatBot() {
       // Phase 1: Upload
       const formData = new FormData()
       formData.append("file", file)
+      if (force) formData.append("force", "true")
 
       // Transition to encrypting after a beat
       await new Promise((r) => setTimeout(r, 800))
@@ -240,12 +649,43 @@ export function ChatBot() {
       // Give the encryption animation time to be seen (minimum 1.5s)
       await new Promise((r) => setTimeout(r, 1500))
 
-      if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.error || "Upload failed")
+      const data = await res.json().catch(() => ({}))
+
+      // Verification mismatch — surface a confirm prompt instead of failing silently.
+      if (res.status === 409 && data.mismatch) {
+        setUploadStatus(null)
+        setPendingMismatch({ file, failures: data.failures ?? [] })
+        addMessage({
+          id: (Date.now() + 1).toString(),
+          role: "assistant",
+          content: `Heads up — this statement doesn't seem to match your linked bank account:\n\n${(data.failures ?? [])
+            .map((f: string) => `• ${f}`)
+            .join("\n")}\n\nIf you uploaded the wrong file, just **cancel** below. If this is from a different account on purpose, hit **Upload anyway**.`,
+        })
+        return
       }
 
-      const data = await res.json()
+      // Duplicate statement → not an error, just a heads-up.
+      if (res.status === 409 && data.duplicate && data.existing) {
+        const e = data.existing
+        const uploaded = new Date(e.uploadedAt).toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        })
+        setUploadStatus("secure")
+        await new Promise((r) => setTimeout(r, 800))
+        addMessage({
+          id: (Date.now() + 1).toString(),
+          role: "assistant",
+          content: `Looks like you've already uploaded this one!\n\n**Statement period:** ${e.periodStart} to ${e.periodEnd}\n**Originally saved:** ${uploaded}\n**Filename in vault:** ${e.filename}\n\nIt's still encrypted and safe in your **Data Vault** — no need to upload it again. Want me to open the vault?`,
+        })
+        return
+      }
+
+      if (!res.ok) {
+        throw new Error(data.error || "Upload failed")
+      }
 
       // Phase 3: Secure
       setUploadStatus("secure")
@@ -561,13 +1001,43 @@ export function ChatBot() {
               </div>
             </ScrollArea>
 
+            {/* Mismatch confirm bar */}
+            {pendingMismatch && (
+              <div className="shrink-0 px-3 pt-2 pb-1 border-t border-border/60 bg-amber-500/[0.06]">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[11px] text-foreground/80 truncate">
+                    Upload <span className="font-medium">{pendingMismatch.file.name}</span> anyway?
+                  </p>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      onClick={() => {
+                        const file = pendingMismatch.file
+                        setPendingMismatch(null)
+                        handleFileUpload(file, true)
+                      }}
+                      className="px-2.5 py-1 rounded-md bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[11px] font-medium hover:bg-amber-500/30 transition-all"
+                    >
+                      Upload anyway
+                    </button>
+                    <button
+                      onClick={() => setPendingMismatch(null)}
+                      className="px-2.5 py-1 rounded-md border border-border text-muted-foreground text-[11px] font-medium hover:bg-muted/60 hover:text-foreground transition-all"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Input area */}
             <div className="shrink-0 p-3 pt-2 border-t border-border/60">
               <input
                 ref={fileInputRef}
+                id="aurora-chat-file-input"
                 type="file"
-                accept=".pdf"
-                className="hidden"
+                accept="application/pdf,.pdf"
+                className="sr-only"
                 onChange={(e) => {
                   const file = e.target.files?.[0]
                   if (file) handleFileUpload(file)
@@ -575,14 +1045,16 @@ export function ChatBot() {
                 }}
               />
               <div className="flex gap-2">
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isLoading || !!uploadStatus}
-                  className="flex items-center justify-center w-10 h-10 rounded-lg border border-border text-muted-foreground hover:text-teal-400 hover:border-teal-500/30 hover:bg-teal-500/[0.05] transition-all disabled:opacity-30 disabled:pointer-events-none shrink-0"
+                <label
+                  htmlFor="aurora-chat-file-input"
+                  aria-disabled={isLoading || !!uploadStatus}
+                  className={`flex items-center justify-center w-10 h-10 rounded-lg border border-border text-muted-foreground hover:text-teal-400 hover:border-teal-500/30 hover:bg-teal-500/[0.05] transition-all shrink-0 cursor-pointer ${
+                    isLoading || !!uploadStatus ? "opacity-30 pointer-events-none" : ""
+                  }`}
                   title="Upload bank statement (PDF)"
                 >
                   <Paperclip className="w-4 h-4" />
-                </button>
+                </label>
                 <Input
                   ref={inputRef}
                   value={input}

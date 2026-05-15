@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Trash2,
   AlertTriangle,
+  Lock,
 } from "lucide-react"
 import { SecurityLoader } from "@/components/security-loader"
 
@@ -49,6 +50,14 @@ export function VaultContent() {
   const [uploadFileName, setUploadFileName] = useState("")
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [uploadMismatch, setUploadMismatch] = useState<{ failures: string[]; warnings: string[] } | null>(null)
+  const [uploadDuplicate, setUploadDuplicate] = useState<{
+    filename: string
+    uploadedAt: string
+    periodStart: string
+    periodEnd: string
+  } | null>(null)
+  // Holds the pending file when a mismatch shows so "Upload anyway" can re-POST it.
+  const [pendingMismatchFile, setPendingMismatchFile] = useState<File | null>(null)
 
   const fetchVault = useCallback(async () => {
     try {
@@ -97,7 +106,7 @@ export function VaultContent() {
     }
   }
 
-  const handleFileUpload = async (file: File) => {
+  const handleFileUpload = async (file: File, force = false) => {
     if (file.type !== "application/pdf" || file.size > 10 * 1024 * 1024) return
 
     setUploadFileName(file.name)
@@ -106,6 +115,7 @@ export function VaultContent() {
     try {
       const formData = new FormData()
       formData.append("file", file)
+      if (force) formData.append("force", "true")
 
       await new Promise((r) => setTimeout(r, 800))
       setUploadStatus("encrypting")
@@ -119,7 +129,18 @@ export function VaultContent() {
 
       if (res.status === 409) {
         const data = await res.json()
-        setUploadMismatch({ failures: data.failures ?? [], warnings: data.warnings ?? [] })
+        if (data.duplicate && data.existing) {
+          setUploadDuplicate({
+            filename: data.existing.filename,
+            uploadedAt: data.existing.uploadedAt,
+            periodStart: data.existing.periodStart,
+            periodEnd: data.existing.periodEnd,
+          })
+        } else {
+          // Verification mismatch — stash the file so "Upload anyway" can re-POST.
+          setUploadMismatch({ failures: data.failures ?? [], warnings: data.warnings ?? [] })
+          setPendingMismatchFile(file)
+        }
         setUploadStatus(null)
         setUploadFileName("")
         return
@@ -136,6 +157,9 @@ export function VaultContent() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const refresh = (window as any).__refreshDashboardMetrics
       if (typeof refresh === "function") refresh()
+      // Clear any leftover mismatch state once we've succeeded.
+      setUploadMismatch(null)
+      setPendingMismatchFile(null)
     } catch {
       // silent fail
     } finally {
@@ -186,9 +210,10 @@ export function VaultContent() {
     <>
       <input
         ref={fileInputRef}
+        id="aurora-vault-file-input"
         type="file"
-        accept=".pdf"
-        className="hidden"
+        accept="application/pdf,.pdf"
+        className="sr-only"
         onChange={(e) => {
           const file = e.target.files?.[0]
           if (file) handleFileUpload(file)
@@ -212,27 +237,82 @@ export function VaultContent() {
         )}
       </AnimatePresence>
 
+      {/* Duplicate upload notice */}
+      {uploadDuplicate && (
+        <div className="rounded-xl border border-aurora-teal/30 bg-aurora-teal/[0.06] p-4 mb-6">
+          <div className="flex items-start gap-3">
+            <Lock className="w-5 h-5 text-aurora-teal shrink-0 mt-0.5" />
+            <div className="space-y-2 flex-1">
+              <p className="text-sm font-medium text-foreground">
+                You&apos;ve already uploaded this statement
+              </p>
+              <p className="text-xs text-muted-foreground">
+                <span className="text-foreground/80">{uploadDuplicate.filename}</span> covers{" "}
+                {uploadDuplicate.periodStart} → {uploadDuplicate.periodEnd}, originally saved on{" "}
+                {new Date(uploadDuplicate.uploadedAt).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                })}.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                It&apos;s already encrypted and safe in your vault — no need to re-upload.
+              </p>
+              <button
+                onClick={() => setUploadDuplicate(null)}
+                className="text-xs text-aurora-teal/80 hover:text-aurora-teal transition-colors"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Verification mismatch warning */}
       {uploadMismatch && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.06] p-4 mb-6">
           <div className="flex items-start gap-3">
             <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-            <div className="space-y-2 flex-1">
-              <p className="text-sm font-medium text-white">
-                This statement doesn&apos;t seem to match your linked bank account
-              </p>
-              {uploadMismatch.failures.map((f, i) => (
-                <p key={i} className="text-xs text-muted-foreground">• {f}</p>
-              ))}
+            <div className="space-y-3 flex-1">
+              <div>
+                <p className="text-sm font-medium text-foreground">
+                  This statement doesn&apos;t seem to match your linked bank account
+                </p>
+                <div className="mt-1 space-y-1">
+                  {uploadMismatch.failures.map((f, i) => (
+                    <p key={i} className="text-xs text-muted-foreground">• {f}</p>
+                  ))}
+                </div>
+              </div>
               <p className="text-xs text-muted-foreground">
-                If this is a different account, you can dismiss this warning.
+                If this is the wrong file, just cancel. If you meant to upload a statement from a different account on purpose, you can override the check below.
               </p>
-              <button
-                onClick={() => setUploadMismatch(null)}
-                className="text-xs text-amber-400/70 hover:text-amber-400 transition-colors"
-              >
-                Dismiss
-              </button>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <button
+                  onClick={() => {
+                    if (pendingMismatchFile) {
+                      const file = pendingMismatchFile
+                      setUploadMismatch(null)
+                      setPendingMismatchFile(null)
+                      handleFileUpload(file, true)
+                    }
+                  }}
+                  disabled={!pendingMismatchFile || !!uploadStatus}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-medium hover:bg-amber-500/30 transition-all disabled:opacity-50"
+                >
+                  Upload anyway
+                </button>
+                <button
+                  onClick={() => {
+                    setUploadMismatch(null)
+                    setPendingMismatchFile(null)
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-muted-foreground text-xs font-medium hover:bg-muted/60 hover:text-foreground transition-all"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -296,17 +376,19 @@ export function VaultContent() {
       </div>
 
       {/* Upload button */}
-      <button
-        onClick={() => fileInputRef.current?.click()}
-        disabled={!!uploadStatus}
-        className="w-full mb-8 py-4 rounded-xl border-2 border-dashed border-border hover:border-teal-500/30 bg-muted/40 hover:bg-teal-500/[0.03] transition-all flex items-center justify-center gap-3 group disabled:opacity-50"
+      <label
+        htmlFor="aurora-vault-file-input"
+        aria-disabled={!!uploadStatus}
+        className={`w-full mb-8 py-4 rounded-xl border-2 border-dashed border-border hover:border-teal-500/30 bg-muted/40 hover:bg-teal-500/[0.03] transition-all flex items-center justify-center gap-3 group cursor-pointer ${
+          uploadStatus ? "opacity-50 pointer-events-none" : ""
+        }`}
       >
         <Upload className="w-5 h-5 text-muted-foreground/70 group-hover:text-teal-400 transition-colors" />
         <span className="text-sm font-medium text-muted-foreground group-hover:text-foreground/80 transition-colors">
           Upload New Statement
         </span>
         <span className="text-xs text-white/20">PDF only, max 10MB</span>
-      </button>
+      </label>
 
       {/* Security Ledger */}
       {uploads.length > 0 && (

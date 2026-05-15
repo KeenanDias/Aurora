@@ -1,4 +1,4 @@
-import { UserButton } from "@clerk/nextjs"
+import { ThemeAwareUserButton } from "@/components/theme-aware-user-button"
 import { currentUser } from "@clerk/nextjs/server"
 import Link from "next/link"
 import { ThemeToggle } from "@/components/theme-toggle"
@@ -34,7 +34,7 @@ export default async function VaultPage() {
               {user?.firstName ? `Hey, ${user.firstName}` : "Welcome"}
             </span>
             <ThemeToggle />
-            <UserButton appearance={{ elements: { avatarBox: "w-9 h-9" } }} />
+            <ThemeAwareUserButton />
           </div>
         </div>
       </header>

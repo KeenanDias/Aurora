@@ -1,9 +1,8 @@
 import type { Metadata } from 'next'
 import { Geist, Geist_Mono } from 'next/font/google'
-import { ClerkProvider } from '@clerk/nextjs'
-import { dark } from '@clerk/themes'
 import { Analytics } from '@vercel/analytics/next'
 import { ThemeProvider } from '@/components/theme-provider'
+import { ThemedClerkProvider } from '@/components/themed-clerk-provider'
 import { LenisProvider } from '@/components/lenis-provider'
 import './globals.css'
 
@@ -38,26 +37,16 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <ClerkProvider
-      appearance={{
-        baseTheme: dark,
-        variables: {
-          colorPrimary: '#10b981',
-          colorBackground: '#020617',
-          colorInputBackground: '#111827',
-          colorInputText: '#e2e8f0',
-        },
-      }}
-    >
-      <html lang="en" suppressHydrationWarning className={`${geist.variable} ${geistMono.variable}`}>
-        <body suppressHydrationWarning className="font-sans antialiased min-h-screen">
-          <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+    <html lang="en" suppressHydrationWarning className={`${geist.variable} ${geistMono.variable}`}>
+      <body suppressHydrationWarning className="font-sans antialiased min-h-screen">
+        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+          <ThemedClerkProvider>
             <LenisProvider />
             {children}
             <Analytics />
-          </ThemeProvider>
-        </body>
-      </html>
-    </ClerkProvider>
+          </ThemedClerkProvider>
+        </ThemeProvider>
+      </body>
+    </html>
   )
 }

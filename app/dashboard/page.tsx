@@ -1,4 +1,5 @@
-import { UserButton } from "@clerk/nextjs"
+import { redirect } from "next/navigation"
+import { ThemeAwareUserButton } from "@/components/theme-aware-user-button"
 import Link from "next/link"
 import { getSupabase } from "@/lib/supabase"
 import { requireApproved } from "@/lib/access-control"
@@ -9,6 +10,14 @@ import { DashboardContent } from "./dashboard-content"
 
 export default async function DashboardPage() {
   const user = await requireApproved()
+
+  // KYC gate — anyone who hasn't finished the scripted onboarding goes there first.
+  const { data: gate } = await getSupabase()
+    .from("user_profiles")
+    .select("onboarded")
+    .eq("clerk_user_id", user?.id ?? "")
+    .maybeSingle()
+  if (!gate?.onboarded) redirect("/onboarding")
 
   // Fetch profile to check bank_linked status
   let profile: Record<string, unknown> | null = null
@@ -60,7 +69,7 @@ export default async function DashboardPage() {
               {user?.firstName ? `Hey, ${user.firstName}` : "Welcome"}
             </span>
             <ThemeToggle />
-            <UserButton appearance={{ elements: { avatarBox: "w-9 h-9" } }} />
+            <ThemeAwareUserButton />
           </div>
         </div>
       </header>

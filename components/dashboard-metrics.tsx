@@ -34,24 +34,6 @@ type Metrics = {
   spendingByCategory?: Record<string, number>
 } | null
 
-// Category display names and colors
-const CATEGORY_COLORS: Record<string, { label: string; color: string }> = {
-  FOOD_AND_DRINK: { label: "Food & Drink", color: "bg-orange-500" },
-  RENT_AND_UTILITIES: { label: "Rent & Utilities", color: "bg-blue-500" },
-  TRANSPORTATION: { label: "Transport", color: "bg-yellow-500" },
-  SHOPPING: { label: "Shopping", color: "bg-pink-500" },
-  ENTERTAINMENT: { label: "Entertainment", color: "bg-purple-500" },
-  RECREATION: { label: "Recreation", color: "bg-teal-500" },
-  GENERAL_MERCHANDISE: { label: "General", color: "bg-slate-500" },
-  PERSONAL_CARE: { label: "Personal Care", color: "bg-rose-500" },
-  GENERAL_SERVICES: { label: "Services", color: "bg-indigo-500" },
-  INSURANCE: { label: "Insurance", color: "bg-cyan-500" },
-}
-
-function getCategoryInfo(key: string) {
-  return CATEGORY_COLORS[key] ?? { label: key.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, c => c.toUpperCase()), color: "bg-white/20" }
-}
-
 export function DashboardMetrics({ bankLinked, hasVaultData, goalSet }: { bankLinked: boolean; hasVaultData?: boolean; goalSet?: boolean }) {
   const [metrics, setMetrics] = useState<Metrics>(null)
   const [loading, setLoading] = useState(false)
@@ -187,13 +169,11 @@ export function DashboardMetrics({ bankLinked, hasVaultData, goalSet }: { bankLi
     },
   ]
 
-  // Spending by category data
-  const categoryData = metrics?.spendingByCategory
-    ? Object.entries(metrics.spendingByCategory)
-        .sort(([, a], [, b]) => b - a)
-        .slice(0, 6)
-    : []
-  const categoryTotal = categoryData.reduce((s, [, v]) => s + v, 0)
+  // (Spending-by-category UI removed — the Categories tab now owns that
+  // view. We still fetch `metrics.spendingByCategory` from the API
+  // because CategoriesTab consumes the same endpoint, and the server's
+  // STS math still computes `spentThisMonth` upstream regardless of what
+  // we render here.)
 
   // ── Setup Pending state ─────────────────────────────────────────────
   // No bank, no vault, nothing to compute from. Replace the $0.00 ghost-town
@@ -374,48 +354,6 @@ export function DashboardMetrics({ bankLinked, hasVaultData, goalSet }: { bankLi
       ))}
       </div>
 
-      {/* Spending breakdown */}
-      {categoryData.length > 0 && (
-        <div className="glass p-5">
-          <h3 className="text-sm font-medium text-foreground/80 mb-4">Where your money went this month</h3>
-
-          {/* Stacked bar */}
-          <div className="w-full h-3 rounded-full overflow-hidden flex mb-4">
-            {categoryData.map(([key, amount]) => {
-              const info = getCategoryInfo(key)
-              const pct = categoryTotal > 0 ? (amount / categoryTotal) * 100 : 0
-              return (
-                <div
-                  key={key}
-                  className={`${info.color} transition-all`}
-                  style={{ width: `${pct}%` }}
-                  title={`${info.label}: $${amount.toFixed(0)}`}
-                />
-              )
-            })}
-          </div>
-
-          {/* Legend */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-            {categoryData.map(([key, amount]) => {
-              const info = getCategoryInfo(key)
-              const pct = categoryTotal > 0 ? Math.round((amount / categoryTotal) * 100) : 0
-              return (
-                <div key={key} className="flex flex-col gap-1.5 rounded-lg bg-muted/40 border border-border/40 px-3 py-2.5">
-                  <div className="flex items-center gap-2">
-                    <div className={`w-2.5 h-2.5 rounded-full ${info.color} shrink-0`} />
-                    <span className="text-xs text-foreground/80 truncate">{info.label}</span>
-                  </div>
-                  <div className="flex items-baseline gap-1.5">
-                    <span className="text-sm font-semibold text-foreground">${amount.toFixed(0)}</span>
-                    <span className="text-[10px] text-muted-foreground">{pct}%</span>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
     </div>
   )
 }

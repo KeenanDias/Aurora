@@ -43,13 +43,28 @@ export type UpcomingBill = {
 
 export type GoalStatus = "active" | "completed" | "paused"
 
+export type EnrolledGoal = {
+  id?: string
+  amount: number
+  saved: number
+  deadline: string | null // ISO date
+  description?: string
+}
+
+const LOW_LIQUIDITY_FLOOR = 20 // dollars/day
+
 export function calculateSafeToSpend(params: {
   monthlyIncome: number
   fixedBills: number
+  // Legacy single-goal inputs — still honored when activeGoals is omitted,
+  // so existing call sites keep working until they're migrated.
   goalAmount: number | null
   goalDeadline: string | null // ISO date
   goalStatus?: GoalStatus | null
   goalSaved?: number | null
+  // New multi-goal feed. Pass enrolled goals (is_enrolled=true) only.
+  // Each one's required monthly contribution is summed into the bite.
+  activeGoals?: EnrolledGoal[]
   safetyBuffer: number
   spentThisMonth: number
   taxWithholding?: boolean
@@ -74,37 +89,94 @@ export function calculateSafeToSpend(params: {
   let spentThisMonth = params.spentThisMonth
   if (params.vaultMetrics) {
     const v = params.vaultMetrics
-    // If vault shows higher income, use it (same logic as Plaid observed income)
-    if (v.totalIncome > effectiveIncome) {
-      effectiveIncome = v.totalIncome
+    // Normalize vault totals to a monthly rate. A statement covering 60
+    // days isn't double a month's income. Without this, multi-month
+    // statements (or short partial-month statements) skewed STS heavily.
+    const periodDays = Math.max(
+      1,
+      Math.round(
+        (new Date(v.periodEnd).getTime() - new Date(v.periodStart).getTime()) /
+          (1000 * 60 * 60 * 24)
+      )
+    )
+    const factor = 30.44 / periodDays
+    const monthlyVaultIncome = v.totalIncome * factor
+
+    // Only upgrade the effective income if the vault signal is plausible —
+    // within a 2× ceiling of the existing effective income, so a savings-
+    // account statement (where "income" is just transfer-ins) can't blow
+    // up the math.
+    if (
+      monthlyVaultIncome > effectiveIncome &&
+      (effectiveIncome === 0 || monthlyVaultIncome <= effectiveIncome * 2)
+    ) {
+      effectiveIncome = monthlyVaultIncome
       if (params.taxWithholding) effectiveIncome *= 0.75
     }
+
     // Merge vault spending into current month if the period overlaps
     const vEnd = new Date(v.periodEnd)
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
     if (vEnd >= startOfMonth) {
-      fixedBills = Math.max(fixedBills, v.fixedBills)
-      const vaultDiscretionary = v.totalSpending - v.fixedBills
+      // Same monthly normalization for spending merges that span the
+      // current month — don't import 2 months of spend as if it happened
+      // this month.
+      fixedBills = Math.max(fixedBills, v.fixedBills * factor)
+      const vaultDiscretionary = (v.totalSpending - v.fixedBills) * factor
       spentThisMonth = Math.max(spentThisMonth, vaultDiscretionary)
     }
   }
 
-  // ── Goal State Machine ─────────────────────────────────────────────
-  // Only deduct savings if goal is active and not yet reached
+  // ── Goal Bite — multi-goal "Active Enrollment" ─────────────────────
+  // For each enrolled goal, compute its required monthly contribution
+  // (remaining ÷ months until deadline) and sum them. Backwards-compatible:
+  // if no activeGoals[] passed, fall back to the legacy single-goal params.
   let monthlySavingsGoal = 0
-  const goalStatus = params.goalStatus ?? "active"
-  const goalCompleted = goalStatus === "completed" ||
-    (params.goalAmount != null && params.goalSaved != null && params.goalSaved >= params.goalAmount)
+  const goalBitesByGoal: { id?: string; description?: string; monthlyBite: number }[] = []
 
-  if (params.goalAmount && params.goalDeadline && !goalCompleted && goalStatus === "active") {
-    const deadline = new Date(params.goalDeadline)
+  const computeMonthlyBite = (g: { amount: number; saved: number; deadline: string | null }) => {
+    if (g.saved >= g.amount) return 0
+    if (!g.deadline) return 0
+    const deadline = new Date(g.deadline)
     const monthsRemaining = Math.max(
       1,
       (deadline.getFullYear() - now.getFullYear()) * 12 +
         (deadline.getMonth() - now.getMonth())
     )
-    monthlySavingsGoal = params.goalAmount / monthsRemaining
+    const remaining = Math.max(0, g.amount - g.saved)
+    return remaining / monthsRemaining
   }
+
+  // Legacy single-goal completion is still surfaced (some callers read goalCompleted)
+  const goalStatus = params.goalStatus ?? "active"
+  const goalCompleted = goalStatus === "completed" ||
+    (params.goalAmount != null && params.goalSaved != null && params.goalSaved >= params.goalAmount)
+
+  if (params.activeGoals && params.activeGoals.length > 0) {
+    for (const g of params.activeGoals) {
+      const bite = computeMonthlyBite(g)
+      if (bite <= 0) continue
+      monthlySavingsGoal += bite
+      goalBitesByGoal.push({
+        id: g.id,
+        description: g.description,
+        monthlyBite: Math.round(bite * 100) / 100,
+      })
+    }
+  } else if (params.goalAmount && params.goalDeadline && !goalCompleted && goalStatus === "active") {
+    // Legacy fallback — single primary goal
+    const bite = computeMonthlyBite({
+      amount: params.goalAmount,
+      saved: params.goalSaved ?? 0,
+      deadline: params.goalDeadline,
+    })
+    monthlySavingsGoal = bite
+    if (bite > 0) {
+      goalBitesByGoal.push({ monthlyBite: Math.round(bite * 100) / 100, description: "Primary goal" })
+    }
+  }
+
+  const totalMonthlyGoalBite = monthlySavingsGoal
 
   // ── Escrow: Big Bill Protection (Weighted Ramp) ────────────────────
   // Bite scales as the due date approaches: weight = 1 - (daysUntilDue / 7).
@@ -204,14 +276,24 @@ export function calculateSafeToSpend(params: {
     !params.vaultMetrics &&
     (!params.accounts || params.accounts.length === 0)
 
+  // ── Safety floor — too many enrolled goals can starve the daily limit
+  // The flag is informational; the math itself isn't clamped, so coaching
+  // logic can decide whether to nudge the user back.
+  const roundedDailySTS = Math.max(0, Math.round(dailySafeToSpend * 100) / 100)
+  const isLowLiquidity = !isPlaceholder && roundedDailySTS < LOW_LIQUIDITY_FLOOR
+
   return {
-    dailySafeToSpend: Math.max(0, Math.round(dailySafeToSpend * 100) / 100),
+    dailySafeToSpend: roundedDailySTS,
     remainingBudget: Math.round(remainingBudget * 100) / 100,
     monthlyAvailable: Math.round(monthlyAvailable * 100) / 100,
     monthlySavingsGoal: Math.round(monthlySavingsGoal * 100) / 100,
+    totalMonthlyGoalBite: Math.round(totalMonthlyGoalBite * 100) / 100,
+    goalBitesByGoal,
     daysRemaining,
     spentThisMonth: params.spentThisMonth,
     isOverBudget: remainingBudget < 0,
+    isLowLiquidity,
+    lowLiquidityFloor: LOW_LIQUIDITY_FLOOR,
     safetyBuffer: params.safetyBuffer,
     spendableCash: spendableCash != null ? Math.round(spendableCash * 100) / 100 : null,
     visualSpendableCash: visualSpendableCash != null ? Math.round(visualSpendableCash * 100) / 100 : null,

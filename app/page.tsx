@@ -8,6 +8,7 @@ import { useAuth } from "@clerk/nextjs"
 import { Lock, Shield, Flame, Send, Sparkles, ArrowRight, Check, MessageSquare } from "lucide-react"
 import { EarlyAccessForm } from "@/components/early-access-form"
 import { ThemeToggle } from "@/components/theme-toggle"
+import { ReturningUserRedirect } from "@/components/returning-user-redirect"
 
 /**
  * Aurora landing — a 5-scene "fly-through" the Northern Lights.
@@ -42,6 +43,7 @@ export default function LandingPage() {
 
   return (
     <div ref={containerRef} className="relative">
+      <ReturningUserRedirect />
       {/* Background is mounted-only to avoid SSR/CSR hydration mismatches */}
       {mounted && (
         <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">

@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation"
 import Link from "next/link"
-import { UserButton } from "@clerk/nextjs"
+import { ThemeAwareUserButton } from "@/components/theme-aware-user-button"
 import { getSupabase } from "@/lib/supabase"
 import { isAdmin } from "@/lib/admin"
 import { StarryBackground } from "@/components/starry-background"
@@ -48,7 +48,7 @@ export default async function AdminPage() {
             <Link href="/dashboard" className="text-sm text-white/50 hover:text-white/80 transition-colors">
               ← Back to dashboard
             </Link>
-            <UserButton appearance={{ elements: { avatarBox: "w-9 h-9" } }} />
+            <ThemeAwareUserButton />
           </div>
         </div>
       </header>

@@ -1,7 +1,7 @@
 import Link from "next/link"
 import { redirect } from "next/navigation"
 import { currentUser } from "@clerk/nextjs/server"
-import { UserButton } from "@clerk/nextjs"
+import { ThemeAwareUserButton } from "@/components/theme-aware-user-button"
 import { getSupabase } from "@/lib/supabase"
 import { Clock, Mail } from "lucide-react"
 import { StarryBackground } from "@/components/starry-background"
@@ -43,7 +43,7 @@ export default async function PendingApprovalPage() {
               Aurora
             </span>
           </Link>
-          <UserButton appearance={{ elements: { avatarBox: "w-9 h-9" } }} />
+          <ThemeAwareUserButton />
         </div>
       </header>
 

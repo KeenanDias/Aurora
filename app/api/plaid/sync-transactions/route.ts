@@ -4,6 +4,7 @@ import { plaidClient } from "@/lib/plaid"
 import { getSupabase } from "@/lib/supabase"
 import { calculateSafeToSpend } from "@/lib/safe-to-spend"
 import type { AccountBalance, VaultMetrics, UpcomingBill } from "@/lib/safe-to-spend"
+import { fetchActiveGoals } from "@/lib/enrolled-goals"
 
 // Categories to ignore for spending — internal money movements, not real spending
 const IGNORED_SPENDING_CATEGORIES = new Set([
@@ -93,7 +94,41 @@ export async function GET() {
       periodEnd: latestVault.period_end,
     }
 
-    const incomeUsed = Math.max(profile.monthly_income ?? 0, vaultMetrics.totalIncome)
+    // Normalize vault totals to a per-month rate. A 33-day statement isn't
+    // monthly income — it's ~1.085 months. A 60-day statement is 2 months.
+    // Without this, multi-month statements doubled the perceived income and
+    // STS ballooned.
+    const periodDays = Math.max(
+      1,
+      Math.round(
+        (new Date(vaultMetrics.periodEnd).getTime() -
+          new Date(vaultMetrics.periodStart).getTime()) /
+          (1000 * 60 * 60 * 24)
+      )
+    )
+    const monthlyFactor = 30.44 / periodDays
+    const monthlyVaultIncome = vaultMetrics.totalIncome * monthlyFactor
+
+    // Same conservative band as the Plaid path — only trust vault income
+    // when it's in the believable range vs self-reported. Savings-account
+    // statements where "income" is really transfers from checking get
+    // discarded because they fall way outside the band.
+    const selfReportedIncome = profile.monthly_income ?? 0
+    let incomeUsed: number
+    if (selfReportedIncome > 0) {
+      const inBand =
+        monthlyVaultIncome >= selfReportedIncome * 0.8 &&
+        monthlyVaultIncome <= selfReportedIncome * 2.0
+      incomeUsed = inBand
+        ? Math.max(selfReportedIncome, monthlyVaultIncome)
+        : selfReportedIncome
+    } else if (monthlyVaultIncome > 0) {
+      incomeUsed = monthlyVaultIncome
+    } else {
+      incomeUsed = 0
+    }
+
+    const activeGoals = await fetchActiveGoals(userId)
 
     const safeToSpend = calculateSafeToSpend({
       monthlyIncome: incomeUsed,
@@ -102,6 +137,7 @@ export async function GET() {
       goalDeadline: profile.goal_deadline,
       goalStatus: profile.goal_status ?? "active",
       goalSaved: profile.goal_saved ?? 0,
+      activeGoals,
       safetyBuffer: profile.safety_buffer ?? 0,
       spentThisMonth: 0,
       taxWithholding: profile.tax_withholding ?? false,
@@ -192,13 +228,33 @@ export async function GET() {
     })
     .reduce((sum, t) => sum + Math.abs(t.amount), 0)
 
-  // Smart income selection: use whichever is higher
-  // Also floor at total spending — if someone spent $7k, they clearly earn at least that
+  // Income selection — be conservative. The old `totalSpent * 1.5` floor
+  // wildly overstated STS when a user had a one-off big spending month
+  // (or in Plaid sandbox where the test user has erratic patterns). New rule:
+  //   - Trust self-reported by default.
+  //   - Only "upgrade" to observed if observed is within a believable band
+  //     around self-reported (between 80% and 200% of it). This treats
+  //     observed as a confirmation signal, not a free upgrade.
+  //   - Fall back to observed-only if there's no self-reported number.
+  //   - Cap the floor at 1.2× spending (not 1.5×) and only when both
+  //     self-reported and observed are missing — i.e., sandbox safety net.
   const selfReportedIncome = profile.monthly_income ?? 0
-  // Floor at 1.5x spending — if someone spent $7k, they likely earn ~$10k+
-  // This prevents $0/day when income signals are weak (sandbox, new accounts)
-  const incomeUsed = Math.max(selfReportedIncome, observedMonthlyIncome, totalSpent * 1.5)
-  const usingObservedIncome = incomeUsed > selfReportedIncome * 1.2 && incomeUsed !== selfReportedIncome
+  let incomeUsed: number
+  if (selfReportedIncome > 0) {
+    const observedInBand =
+      observedMonthlyIncome >= selfReportedIncome * 0.8 &&
+      observedMonthlyIncome <= selfReportedIncome * 2.0
+    incomeUsed = observedInBand
+      ? Math.max(selfReportedIncome, observedMonthlyIncome)
+      : selfReportedIncome
+  } else if (observedMonthlyIncome > 0) {
+    incomeUsed = observedMonthlyIncome
+  } else {
+    // No real signal at all — last-resort floor for the dashboard to show
+    // something other than $0. Capped low so it doesn't lie too hard.
+    incomeUsed = Math.min(totalSpent * 1.2, 2000)
+  }
+  const usingObservedIncome = incomeUsed > selfReportedIncome && observedMonthlyIncome >= selfReportedIncome * 0.8
 
   // Identify likely fixed bills (rent, utilities, insurance, loans)
   const fixedBills = realSpending
@@ -211,8 +267,24 @@ export async function GET() {
     )
     .reduce((sum, t) => sum + t.amount, 0)
 
-  // Discretionary spending = total minus fixed bills (avoid double-counting)
-  const discretionarySpent = totalSpent - fixedBills
+  // Manual chatbot-reported spending — currently inserted into
+  // manual_transactions but ignored by STS math, so users can "spend $50"
+  // in chat and the dashboard never sees it. Roll the current-month entries
+  // into discretionary so the daily limit reflects them too.
+  const startOfMonthIso = startOfMonth.toISOString()
+  const { data: manualRows } = await getSupabase()
+    .from("manual_transactions")
+    .select("amount")
+    .eq("clerk_user_id", userId)
+    .gte("occurred_at", startOfMonthIso)
+  const manualSpentThisMonth = (manualRows ?? []).reduce(
+    (s, r) => s + Number(r.amount ?? 0),
+    0
+  )
+
+  // Discretionary spending = (total - fixed) + manual claims. Plaid won't
+  // see manual entries, so we add them on top without subtracting fixed.
+  const discretionarySpent = totalSpent - fixedBills + manualSpentThisMonth
 
   // Total balance across all accounts (for overview display)
   const totalBalance = accounts.reduce(
@@ -243,6 +315,7 @@ export async function GET() {
 
   // Calculate Safe-to-Spend with account data for liquidity
   // Pass discretionary spending so fixed bills aren't subtracted twice
+  const activeGoalsForBank = await fetchActiveGoals(userId)
   const safeToSpend = calculateSafeToSpend({
     monthlyIncome: incomeUsed,
     fixedBills,
@@ -250,6 +323,7 @@ export async function GET() {
     goalDeadline: profile.goal_deadline,
     goalStatus: profile.goal_status ?? "active",
     goalSaved: profile.goal_saved ?? 0,
+    activeGoals: activeGoalsForBank,
     safetyBuffer: profile.safety_buffer ?? 0,
     spentThisMonth: discretionarySpent,
     taxWithholding: profile.tax_withholding ?? false,
@@ -275,6 +349,32 @@ export async function GET() {
       observed: Math.round(observedMonthlyIncome * 100) / 100,
       used: Math.round(incomeUsed * 100) / 100,
       usingObserved: usingObservedIncome,
+    },
+    // Dev visibility — every input that fed calculateSafeToSpend so you can
+    // see why the daily number is what it is. Strip from prod if you'd
+    // rather not expose it.
+    debug: {
+      monthlyIncomeUsed: Math.round(incomeUsed * 100) / 100,
+      fixedBills: Math.round(fixedBills * 100) / 100,
+      plaidSpentThisMonth: Math.round(totalSpent * 100) / 100,
+      manualSpentThisMonth: Math.round(manualSpentThisMonth * 100) / 100,
+      discretionarySpentFedToMath: Math.round(discretionarySpent * 100) / 100,
+      safetyBuffer: profile.safety_buffer ?? 0,
+      taxWithholding: profile.tax_withholding ?? false,
+      activeGoalsCount: activeGoalsForBank.length,
+      activeGoals: activeGoalsForBank.map((g) => ({
+        id: g.id,
+        description: g.description,
+        amount: g.amount,
+        saved: g.saved,
+        deadline: g.deadline,
+      })),
+      goalBitesByGoal: safeToSpend.goalBitesByGoal,
+      totalMonthlyGoalBite: safeToSpend.totalMonthlyGoalBite,
+      escrowTotal: safeToSpend.escrowTotal,
+      weightedEscrowBite: safeToSpend.weightedEscrowBite,
+      vaultMetrics,
+      daysRemaining: safeToSpend.daysRemaining,
     },
     accounts: accounts.map((a) => ({
       name: a.name,
