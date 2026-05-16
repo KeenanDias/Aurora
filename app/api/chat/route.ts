@@ -7,7 +7,17 @@ import { calculateSafeToSpend } from "@/lib/safe-to-spend"
 import { fetchActiveGoals } from "@/lib/enrolled-goals"
 import type { AccountBalance } from "@/lib/safe-to-spend"
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+// Lazy-init so the client is constructed at request time, not at module
+// load. Fixes Cloudflare/Vercel build-time page-data collection failing
+// with "Missing credentials" because env vars aren't injected during
+// next build by default.
+let _openai: OpenAI | null = null
+function getOpenAI() {
+  if (!_openai) {
+    _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  }
+  return _openai
+}
 
 // ── Discovery Agent System Prompt ──────────────────────────────────────────
 const AURORA_SYSTEM_PROMPT = `You are Aurora, an AI financial coach built for gig workers, freelancers, and young professionals living on variable income.
@@ -873,7 +883,7 @@ Pick up where you left off. Don't re-ask what you already know.`
   }
 
   // First call — may include tool calls
-  const completion = await openai.chat.completions.create({
+  const completion = await getOpenAI().chat.completions.create({
     model: "o4-mini",
     messages: [{ role: "system", content: systemPrompt }, ...messages],
     tools,
@@ -919,7 +929,7 @@ Pick up where you left off. Don't re-ask what you already know.`
     }
 
     // Get the follow-up response after tool execution
-    const followUp = await openai.chat.completions.create({
+    const followUp = await getOpenAI().chat.completions.create({
       model: "o4-mini",
       messages: allMessages,
       tools,

@@ -1,18 +1,35 @@
 import { Configuration, CountryCode, PlaidApi, PlaidEnvironments } from "plaid"
 
-const plaidEnv = process.env.PLAID_ENV || "sandbox"
-
-const configuration = new Configuration({
-  basePath: PlaidEnvironments[plaidEnv],
-  baseOptions: {
-    headers: {
-      "PLAID-CLIENT-ID": process.env.PLAID_CLIENT_ID!,
-      "PLAID-SECRET": process.env.PLAID_SECRET!,
+// Lazy-init so the client is constructed at request time, not at module
+// load. Next.js's build-time page-data collection evaluates module
+// top-level code without env vars injected — `new PlaidApi(...)` would
+// otherwise crash the build with "Missing credentials."
+let _plaidClient: PlaidApi | null = null
+function getPlaidClient(): PlaidApi {
+  if (_plaidClient) return _plaidClient
+  const plaidEnv = process.env.PLAID_ENV || "sandbox"
+  const configuration = new Configuration({
+    basePath: PlaidEnvironments[plaidEnv],
+    baseOptions: {
+      headers: {
+        "PLAID-CLIENT-ID": process.env.PLAID_CLIENT_ID ?? "",
+        "PLAID-SECRET": process.env.PLAID_SECRET ?? "",
+      },
     },
-  },
-})
+  })
+  _plaidClient = new PlaidApi(configuration)
+  return _plaidClient
+}
 
-export const plaidClient = new PlaidApi(configuration)
+// Proxy keeps the `import { plaidClient } from "@/lib/plaid"` call sites
+// unchanged. Any property access constructs the underlying client on demand.
+export const plaidClient = new Proxy({} as PlaidApi, {
+  get(_target, prop) {
+    const client = getPlaidClient() as unknown as Record<string | symbol, unknown>
+    const value = client[prop]
+    return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(client) : value
+  },
+}) as PlaidApi
 
 export type PlaidIdentityData = {
   institutionId: string
