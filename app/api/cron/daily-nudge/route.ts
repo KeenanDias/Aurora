@@ -6,14 +6,26 @@ import type { AccountBalance, VaultMetrics, UpcomingBill } from "@/lib/safe-to-s
 import { sendSMS } from "@/lib/twilio"
 import OpenAI from "openai"
 
-const CRON_SECRET = process.env.CRON_SECRET
+// Force this route to be dynamic — never prerendered. Next.js's page-data
+// collection step would otherwise try to evaluate the module at build
+// time, which blows up because the runtime env vars aren't available.
+export const dynamic = "force-dynamic"
+export const runtime = "nodejs"
+
 const IGNORED_SPENDING = new Set(["TRANSFER_IN", "TRANSFER_OUT", "CREDIT_CARD", "LOAN_PAYMENTS"])
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+// Lazy-init so the OpenAI client is constructed at request time, not at
+// module load. Without this Cloudflare's build crashes during page-data
+// collection with "Missing credentials."
+let _openai: OpenAI | null = null
+function getOpenAI() {
+  if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  return _openai
+}
 
 export async function GET(req: Request) {
   const authHeader = req.headers.get("authorization")
-  if (authHeader !== `Bearer ${CRON_SECRET}`) {
+  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
@@ -400,7 +412,7 @@ async function generateOverspendNudge(
     ? ` Note: $${escrowedBills.reduce((s, b) => s + b.amount, 0)} is protected for ${escrowedBills.map(b => b.name).join(", ")} coming up.`
     : ""
 
-  const response = await openai.chat.completions.create({
+  const response = await getOpenAI().chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0.8,
     max_tokens: 80,
@@ -436,7 +448,7 @@ async function generateMorningCheckIn(
     ? ` $${escrowedBills.reduce((s, b) => s + b.amount, 0)} is escrowed for ${escrowedBills.map(b => b.name).join(", ")}.`
     : ""
 
-  const response = await openai.chat.completions.create({
+  const response = await getOpenAI().chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0.8,
     max_tokens: 80,
