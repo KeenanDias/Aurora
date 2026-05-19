@@ -332,14 +332,34 @@ export async function GET() {
     upcomingBills,
   })
 
-  // Categorize spending (excluding transfers)
+  // Categorize spending (excluding transfers). CRITICAL: the per-category
+  // transactions list MUST be derived from the same `realSpending` array
+  // that feeds spendingByCategory — otherwise the summary number and the
+  // expanded transactions disagree (the old code built `recentTransactions`
+  // from the unfiltered 30-day window which included transfers, deposits,
+  // and out-of-month rows).
   const spendingByCategory: Record<string, number> = {}
+  const transactionsByCategory: Record<
+    string,
+    { name: string; amount: number; date: string }[]
+  > = {}
   for (const t of realSpending) {
     const cat =
       t.personal_finance_category?.primary ??
       t.category?.[0] ??
       "Other"
     spendingByCategory[cat] = (spendingByCategory[cat] ?? 0) + t.amount
+    if (!transactionsByCategory[cat]) transactionsByCategory[cat] = []
+    transactionsByCategory[cat].push({
+      name: t.name,
+      amount: t.amount,
+      date: t.date,
+    })
+  }
+  // Sort each category's transactions by date descending so the "last N"
+  // slice the client takes are actually the most-recent.
+  for (const cat of Object.keys(transactionsByCategory)) {
+    transactionsByCategory[cat].sort((a, b) => (a.date < b.date ? 1 : -1))
   }
 
   return NextResponse.json({
@@ -387,6 +407,9 @@ export async function GET() {
     spentThisMonth: Math.round(totalSpent * 100) / 100,
     fixedBills: Math.round(fixedBills * 100) / 100,
     spendingByCategory,
+    transactionsByCategory,
+    // Kept for back-compat with anything else that reads it, but
+    // CategoriesTab now consumes transactionsByCategory above.
     recentTransactions: transactions
       .filter((t) => spendingAccountIds.has(t.account_id))
       .slice(0, 10)

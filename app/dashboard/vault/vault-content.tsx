@@ -24,6 +24,10 @@ type VaultUpload = {
   period_end: string
   total_income: number
   total_spending: number
+  total_outflow?: number | null      // raw "Total Money Out" — see lib/parse-statement.ts
+  opening_balance?: number | null
+  closing_balance?: number | null
+  derived_outflow?: boolean          // true when total_outflow was computed via fallback formula
   fixed_bills: number
   transaction_count: number
   source: string
@@ -439,7 +443,7 @@ export function VaultContent() {
             <span className="text-xs font-medium text-muted-foreground">File</span>
             <span className="text-xs font-medium text-muted-foreground">Period</span>
             <span className="text-xs font-medium text-muted-foreground">Source</span>
-            <span className="text-xs font-medium text-muted-foreground text-right">Spending</span>
+            <span className="text-xs font-medium text-muted-foreground text-right">Money Out</span>
             <span className="text-xs font-medium text-muted-foreground text-center">Details</span>
             <span className="text-xs font-medium text-muted-foreground text-center"></span>
           </div>
@@ -464,8 +468,8 @@ export function VaultContent() {
               >
                 {u.source === "manual_upload" ? "Upload" : "Plaid"}
               </span>
-              <span className="text-xs text-muted-foreground text-right">
-                ${u.total_spending.toLocaleString()}
+              <span className="text-xs text-rose-400 text-right tabular-nums font-medium">
+                -${(u.total_outflow ?? u.total_spending).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
               </span>
               <div className="flex justify-center">
                 <button
@@ -546,7 +550,35 @@ export function VaultContent() {
                     </div>
                   </div>
 
-                  {/* Metrics summary */}
+                  {/* Total Money Out — the raw outflow card. Matches what
+                      the user reads off their paper statement. */}
+                  <div className="px-5 pt-5">
+                    <div className="relative overflow-hidden rounded-2xl border border-rose-500/30 bg-gradient-to-br from-rose-500/[0.08] via-rose-500/[0.04] to-transparent backdrop-blur-xl p-5">
+                      <div className="absolute -top-16 -right-16 w-44 h-44 rounded-full bg-rose-500/15 blur-3xl pointer-events-none" />
+                      <div className="relative flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-[10px] uppercase tracking-wider text-rose-300/90 font-semibold">
+                            Total Money Out
+                          </p>
+                          <p className="text-3xl sm:text-4xl font-bold text-foreground tabular-nums mt-1">
+                            <span className="text-rose-400">-</span>$
+                            {(
+                              selectedUpload.total_outflow ?? selectedUpload.total_spending
+                            ).toLocaleString(undefined, {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}
+                          </p>
+                          <p className="text-[11px] text-muted-foreground mt-1">
+                            Every debit, withdrawal, transfer out, fee, and payment in the statement period.
+                            {selectedUpload.derived_outflow ? " (Calculated from balances)" : ""}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Metrics summary — three supporting stats */}
                   <div className="grid grid-cols-3 gap-4 p-5 border-b border-white/[0.04]">
                     <div>
                       <p className="text-xs text-muted-foreground">Income</p>
@@ -555,7 +587,7 @@ export function VaultContent() {
                       </p>
                     </div>
                     <div>
-                      <p className="text-xs text-muted-foreground">Spending</p>
+                      <p className="text-xs text-muted-foreground">Discretionary</p>
                       <p className="text-lg font-bold text-orange-400">
                         ${selectedUpload.total_spending.toLocaleString()}
                       </p>

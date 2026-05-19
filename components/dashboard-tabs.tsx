@@ -65,6 +65,10 @@ type Metrics = {
   spentThisMonth: number
   fixedBills: number
   spendingByCategory?: Record<string, number>
+  // Per-category transactions list, pre-filtered server-side using the
+  // SAME `realSpending` set that feeds spendingByCategory. So the
+  // summary number and the expanded list always reconcile.
+  transactionsByCategory?: Record<string, { name: string; amount: number; date: string }[]>
   recentTransactions?: { name: string; amount: number; date: string; category?: string }[]
 }
 
@@ -1490,6 +1494,9 @@ function CategoriesTab({
   hasVaultData: boolean
 }) {
   const [expanded, setExpanded] = useState<string | null>(null)
+  // Hover state for our custom-positioned tooltip. We pin the floating
+  // card above the chart so it never overlaps the centered STS number.
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null)
 
   const isReady = bankLinked || hasVaultData
 
@@ -1504,15 +1511,18 @@ function CategoriesTab({
   const total = data.reduce((s, d) => s + d.value, 0)
   const sts = metrics?.safeToSpend.dailySafeToSpend ?? 0
 
-  // Group recent transactions by category for the expandable rows.
+  // Per-category transactions. Consumes the server-side `transactionsByCategory`
+  // map (built from the SAME `realSpending` set that feeds spendingByCategory),
+  // so the expanded list always reconciles with the summary number. Falls
+  // back to the legacy client-side bucket only if the server didn't ship
+  // the new field.
   const txByCategory = useMemo(() => {
+    if (metrics?.transactionsByCategory) return metrics.transactionsByCategory
     const map: Record<string, { name: string; amount: number; date: string }[]> = {}
     for (const t of metrics?.recentTransactions ?? []) {
       const k = t.category ?? "Other"
       if (!map[k]) map[k] = []
-      if (map[k].length < 3 && t.amount > 0) {
-        map[k].push({ name: t.name, amount: t.amount, date: t.date })
-      }
+      if (t.amount > 0) map[k].push({ name: t.name, amount: t.amount, date: t.date })
     }
     return map
   }, [metrics])
@@ -1540,6 +1550,43 @@ function CategoriesTab({
           Spending breakdown with your daily limit at the center — your discipline pivot.
         </p>
         <div className="relative w-full h-72">
+          {/* Custom hover tooltip — pinned above the donut so it never
+              overlaps the centered STS number. Fades in/out via CSS. */}
+          <div
+            className={`absolute left-1/2 -translate-x-1/2 top-0 z-20 pointer-events-none transition-all duration-200 ${
+              hoveredKey
+                ? "opacity-100 translate-y-0"
+                : "opacity-0 -translate-y-1"
+            }`}
+          >
+            {(() => {
+              const slice = data.find((d) => d.key === hoveredKey)
+              if (!slice) return null
+              const pct = total > 0 ? Math.round((slice.value / total) * 100) : 0
+              return (
+                <div
+                  className="rounded-lg border bg-[rgba(13,21,39,0.96)] backdrop-blur-md shadow-2xl px-3 py-2 min-w-[140px]"
+                  style={{ borderColor: "rgba(255,255,255,0.12)" }}
+                >
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span
+                      className="inline-block w-2 h-2 rounded-full shrink-0"
+                      style={{ backgroundColor: slice.meta.color }}
+                    />
+                    <span className="text-[10px] uppercase tracking-wider text-white/60 font-semibold">
+                      {slice.meta.label}
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="text-sm font-bold text-white tabular-nums">
+                      ${slice.value.toFixed(2)}
+                    </span>
+                    <span className="text-[10px] text-white/50 tabular-nums">{pct}%</span>
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
               <Pie
@@ -1552,26 +1599,21 @@ function CategoriesTab({
                 paddingAngle={data.length > 1 ? 2 : 0}
                 animationBegin={0}
                 animationDuration={900}
+                onMouseEnter={(_, idx) => {
+                  if (data.length === 0) return
+                  setHoveredKey(data[idx]?.key ?? null)
+                }}
+                onMouseLeave={() => setHoveredKey(null)}
               >
                 {(data.length > 0 ? data : [{ key: "empty", value: 1, meta: categoryMeta("OTHER") }]).map((d, i) => (
-                  <Cell key={i} fill={data.length > 0 ? d.meta.color : "rgba(100,116,139,0.15)"} />
+                  <Cell
+                    key={i}
+                    fill={data.length > 0 ? d.meta.color : "rgba(100,116,139,0.15)"}
+                    fillOpacity={hoveredKey && hoveredKey !== d.key ? 0.45 : 1}
+                    style={{ transition: "fill-opacity 180ms ease" }}
+                  />
                 ))}
               </Pie>
-              {data.length > 0 && (
-                <ReTooltip
-                  contentStyle={{
-                    background: "rgba(11, 17, 32, 0.92)",
-                    border: "1px solid rgba(255,255,255,0.1)",
-                    borderRadius: "0.5rem",
-                    color: "#f8fafc",
-                    fontSize: "12px",
-                  }}
-                  formatter={(v: number, _: unknown, p: { payload?: { meta?: { label?: string } } }) => [
-                    `$${v.toFixed(0)}`,
-                    p?.payload?.meta?.label ?? "",
-                  ]}
-                />
-              )}
             </PieChart>
           </ResponsiveContainer>
           {/* Centered STS */}

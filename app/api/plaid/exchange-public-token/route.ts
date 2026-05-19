@@ -5,20 +5,60 @@ import { getSupabase } from "@/lib/supabase"
 import { verifyAccountMatch } from "@/lib/verify-account-match"
 import type { StatementIdentity } from "@/lib/parse-statement"
 
+export const dynamic = "force-dynamic"
+
+// Tag every server log with the route + a redacted user id so we can grep
+// production logs without ever seeing access tokens or public tokens.
+function logSafe(stage: string, userId: string, extra?: Record<string, unknown>) {
+  const safeUid = userId.length > 8 ? `${userId.slice(0, 4)}…${userId.slice(-4)}` : userId
+  const safeExtra: Record<string, unknown> = {}
+  if (extra) {
+    for (const [k, v] of Object.entries(extra)) {
+      // Never log token-shaped values. Always strip anything that looks
+      // like an access_token / public_token / secret.
+      if (/(access|public|secret|token)/i.test(k)) continue
+      safeExtra[k] = typeof v === "string" ? v.slice(0, 80) : v
+    }
+  }
+  console.log(`[plaid/exchange] ${stage}`, { uid: safeUid, ...safeExtra })
+}
+
 export async function POST(req: NextRequest) {
   const { userId } = await auth()
   if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const { public_token, force } = await req.json()
+  let public_token: string | undefined
+  let force: boolean | undefined
+  try {
+    const body = await req.json()
+    public_token = body.public_token
+    force = body.force
+  } catch {
+    return NextResponse.json({ error: "Invalid request body" }, { status: 400 })
+  }
+
+  if (!public_token || typeof public_token !== "string") {
+    return NextResponse.json({ error: "Missing public_token" }, { status: 400 })
+  }
 
   // Exchange for permanent access token
-  const response = await plaidClient.itemPublicTokenExchange({
-    public_token,
-  })
+  let response
+  try {
+    response = await plaidClient.itemPublicTokenExchange({ public_token })
+  } catch (err) {
+    const safeMessage =
+      err instanceof Error ? err.message.slice(0, 200) : "Unknown Plaid error"
+    logSafe("itemPublicTokenExchange failed", userId, { error: safeMessage })
+    return NextResponse.json(
+      { error: "Could not complete bank link. Please try again." },
+      { status: 502 }
+    )
+  }
 
   const { access_token, item_id } = response.data
+  logSafe("token exchanged", userId, { item_id })
 
   // Fetch institution + account identity data from Plaid
   let plaidIdentity

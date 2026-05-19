@@ -153,20 +153,24 @@ export async function computeBudgetStreak(userId: string): Promise<StreakResult>
   const todayLimit = dailyLimitForDate(now)
   const brokenToday = todayLimit > 0 && todaySpent > todayLimit
 
-  // ── 4. Cap the walk by account age — you can't have a 60-day streak
-  //       on day 3 of using the app. The earliest "anchor" we can find:
-  //         1. Earliest transaction date in our window (if any), else
-  //         2. user_profiles.created_at (account creation), else
-  //         3. today (cap = 0 → empty streak)
+  // ── 4. Cap the walk by account age. The anchor priority:
+  //       1. user_profiles.created_at is the HARD ceiling — the user
+  //          literally couldn't have had a streak before signing up.
+  //          Plaid sandbox returns transactions up to 2 years old, so
+  //          using the earliest tx date here would falsely inflate the
+  //          streak count.
+  //       2. Fall back to earliest transaction date only when there's
+  //          no account creation timestamp on the profile.
+  //       3. If neither exists, cap = 0 → empty streak.
   const txDates = Array.from(perDay.keys()).sort()
   const earliestTxIso = txDates[0] // YYYY-MM-DD or undefined
   const accountCreatedAt = profile.created_at ? new Date(profile.created_at as string) : null
 
   let earliestAnchor: Date | null = null
-  if (earliestTxIso) {
-    earliestAnchor = new Date(earliestTxIso + "T00:00:00")
-  } else if (accountCreatedAt) {
+  if (accountCreatedAt) {
     earliestAnchor = accountCreatedAt
+  } else if (earliestTxIso) {
+    earliestAnchor = new Date(earliestTxIso + "T00:00:00")
   }
 
   const daysSinceFirstActivity = earliestAnchor

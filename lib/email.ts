@@ -1,28 +1,69 @@
 import { Resend } from "resend"
+import { getSupabase } from "@/lib/supabase"
 
 /**
- * Send approval email via Resend. If RESEND_API_KEY is unset, logs to console
- * and returns success — so local dev / preview deployments don't blow up.
+ * Production transactional email engine.
  *
- * Setup: https://resend.com → grab API key → set RESEND_API_KEY + EMAIL_FROM
- *   EMAIL_FROM should be "Aurora <noreply@yourdomain.com>" once you verify a domain,
- *   or "onboarding@resend.dev" for testing without domain setup.
+ * Configuration (set via Cloudflare env / .env.local):
+ *   RESEND_API_KEY   — required in production (sandbox API key fine in dev)
+ *   EMAIL_FROM       — required. Must use a verified Resend domain in production.
+ *                      Example: "Aurora <hi@youraurora.com>". The onboarding@resend.dev
+ *                      fallback is intentionally NOT used as a default — it would
+ *                      limit delivery to the developer's own inbox in sandbox mode.
+ *
+ * Failure handling: every send wraps the call. On error we:
+ *   1. Log a redacted line to the server console.
+ *   2. Persist a row to `email_errors` (Supabase) for ops visibility.
+ *   3. Return { ok: false } to the caller — never throws, never crashes the
+ *      route handler that triggered the email.
  */
-export async function sendApprovalEmail(params: {
-  to: string
-  name: string
-  signInUrl: string
-}): Promise<{ ok: boolean; error?: string }> {
-  const apiKey = process.env.RESEND_API_KEY
-  const from = process.env.EMAIL_FROM ?? "Aurora <onboarding@resend.dev>"
 
-  const subject = "You're in! Welcome to the Aurora beta"
-  const html = approvalEmailHtml(params.name, params.signInUrl)
-  const text = approvalEmailText(params.name, params.signInUrl)
+type EmailResult = { ok: boolean; error?: string }
+
+function resolveFromAddress(): { from: string | null; reason?: string } {
+  const from = process.env.EMAIL_FROM?.trim()
+  if (!from) return { from: null, reason: "EMAIL_FROM env var is not set" }
+  // Quick sanity check — block obvious typo or trailing-whitespace cases.
+  if (!/<[^>]+@[^>]+>/.test(from) && !/^[^@\s]+@[^@\s]+$/.test(from)) {
+    return { from: null, reason: `EMAIL_FROM "${from}" doesn't look like a valid sender address` }
+  }
+  return { from }
+}
+
+async function recordFailure(stage: string, to: string, message: string) {
+  try {
+    await getSupabase().from("email_errors").insert({
+      stage,
+      recipient: to,
+      error_message: message.slice(0, 500),
+    })
+  } catch {
+    // If even the Supabase insert fails, don't cascade — just console it.
+    console.error(`[email] failed to record failure to Supabase (${stage} → ${to}): ${message}`)
+  }
+}
+
+async function sendEmail(params: {
+  stage: string
+  to: string
+  subject: string
+  html: string
+  text: string
+}): Promise<EmailResult> {
+  const apiKey = process.env.RESEND_API_KEY
+  const { from, reason } = resolveFromAddress()
 
   if (!apiKey) {
-    console.warn("[email] RESEND_API_KEY not set — would have sent:", { to: params.to, subject })
+    const msg = "RESEND_API_KEY missing — email skipped (dev mode)"
+    console.warn(`[email] ${msg}:`, { to: params.to, subject: params.subject })
     return { ok: true }
+  }
+
+  if (!from) {
+    const msg = reason ?? "EMAIL_FROM missing"
+    console.error(`[email] ${msg}`)
+    await recordFailure(params.stage, params.to, msg)
+    return { ok: false, error: msg }
   }
 
   try {
@@ -30,45 +71,51 @@ export async function sendApprovalEmail(params: {
     const { error } = await resend.emails.send({
       from,
       to: params.to,
-      subject,
-      html,
-      text,
+      subject: params.subject,
+      html: params.html,
+      text: params.text,
     })
     if (error) {
-      console.error("[email] resend error:", error)
+      console.error(`[email] resend error (${params.stage}):`, error.message)
+      await recordFailure(params.stage, params.to, error.message)
       return { ok: false, error: error.message }
     }
     return { ok: true }
   } catch (err) {
-    console.error("[email] send threw:", err)
-    return { ok: false, error: err instanceof Error ? err.message : "Unknown email error" }
+    const msg = err instanceof Error ? err.message : "Unknown email error"
+    console.error(`[email] send threw (${params.stage}):`, msg)
+    await recordFailure(params.stage, params.to, msg)
+    return { ok: false, error: msg }
   }
+}
+
+export async function sendApprovalEmail(params: {
+  to: string
+  name: string
+  signInUrl: string
+}): Promise<EmailResult> {
+  return sendEmail({
+    stage: "approval",
+    to: params.to,
+    subject: "You're in! Welcome to the Aurora beta",
+    html: approvalEmailHtml(params.name, params.signInUrl),
+    text: approvalEmailText(params.name, params.signInUrl),
+  })
 }
 
 export async function sendDenialEmail(params: {
   to: string
   name: string
-}): Promise<{ ok: boolean; error?: string }> {
-  const apiKey = process.env.RESEND_API_KEY
-  const from = process.env.EMAIL_FROM ?? "Aurora <onboarding@resend.dev>"
-
-  const subject = "An update on your Aurora early access request"
+}): Promise<EmailResult> {
   const html = `<p>Hi ${escapeHtml(params.name)},</p><p>Thanks so much for your interest in the Aurora beta. Unfortunately, we aren't able to give you access at this time. We'll keep your details on file and reach out if anything changes.</p><p>— The Aurora team</p>`
   const text = `Hi ${params.name},\n\nThanks for your interest in the Aurora beta. Unfortunately, we aren't able to give you access at this time. We'll keep your details on file and reach out if anything changes.\n\n— The Aurora team`
-
-  if (!apiKey) {
-    console.warn("[email] RESEND_API_KEY not set — would have sent denial:", { to: params.to })
-    return { ok: true }
-  }
-
-  try {
-    const resend = new Resend(apiKey)
-    const { error } = await resend.emails.send({ from, to: params.to, subject, html, text })
-    if (error) return { ok: false, error: error.message }
-    return { ok: true }
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : "Unknown email error" }
-  }
+  return sendEmail({
+    stage: "denial",
+    to: params.to,
+    subject: "An update on your Aurora early access request",
+    html,
+    text,
+  })
 }
 
 function approvalEmailHtml(name: string, signInUrl: string) {

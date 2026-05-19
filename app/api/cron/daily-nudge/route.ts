@@ -31,7 +31,7 @@ export async function GET(req: Request) {
 
   const { data: users, error } = await getSupabase()
     .from("user_profiles")
-    .select("clerk_user_id, name, phone_number, plaid_access_token, bank_linked, monthly_income, goal_amount, goal_deadline, goal_saved, goal_status, safety_buffer, tax_withholding, points, points_streak, longest_streak, last_points_date")
+    .select("clerk_user_id, name, phone_number, plaid_access_token, bank_linked, monthly_income, goal_amount, goal_description, goal_deadline, goal_saved, goal_status, safety_buffer, tax_withholding, points, points_streak, longest_streak, last_points_date, last_predictive_nudge_date")
     .eq("onboarded", true)
     .not("phone_number", "is", null)
 
@@ -147,7 +147,39 @@ export async function GET(req: Request) {
         .eq("clerk_user_id", user.clerk_user_id)
 
       // ── SMS Message ──────────────────────────────────────────────────
-      if (wasOverYesterday && spentYesterday > 0) {
+      // Priority:
+      //   1. Predictive nudge — user is on pace to overspend by month-end.
+      //      Dedup'd via last_predictive_nudge_date so we don't spam.
+      //   2. Yesterday-overspend reactive nudge (legacy fallback).
+      //   3. Standard morning check-in.
+      const {
+        isOnPaceToOverspend,
+        predictedRunoutDate,
+        velocity,
+        projectedDiscretionary,
+        monthlyAvailable: projMonthlyAvailable,
+      } = metrics
+      const alreadyNudgedToday = user.last_predictive_nudge_date === today
+      const fireRunoutDate = predictedRunoutDate ?? today
+
+      if (isOnPaceToOverspend && !alreadyNudgedToday) {
+        const nudge = generatePredictiveNudge({
+          name: user.name ?? "there",
+          predictedRunoutIso: fireRunoutDate,
+          primaryGoalName: (user.goal_description as string | null) ?? null,
+        })
+        await sendSMS(user.phone_number, nudge)
+        // Mark as nudged so we don't repeat the warning every morning until
+        // they course-correct (velocity drops below the overspend threshold).
+        await getSupabase()
+          .from("user_profiles")
+          .update({ last_predictive_nudge_date: today })
+          .eq("clerk_user_id", user.clerk_user_id)
+        results.push({
+          userId: user.clerk_user_id,
+          action: `predictive_v$${velocity}_proj$${projectedDiscretionary}_avail$${projMonthlyAvailable}_runout${fireRunoutDate}`,
+        })
+      } else if (wasOverYesterday && spentYesterday > 0) {
         const nudge = await generateOverspendNudge(
           user.name ?? "there",
           topSpend,
@@ -217,6 +249,19 @@ type UserMetrics = {
   overBy: number
   escrowedBills: { name: string; amount: number; dueDate: string }[]
   escrowTotal: number
+  // ── Predictive velocity (Velocity Math) ──────────────────────────────
+  // V = discretionarySpent / daysElapsed (month-to-date)
+  // ProjectedDiscretionary = V × daysInMonth
+  // If ProjectedDiscretionary > monthlyAvailable → user is statistically
+  // on pace to run out of money before next paycheck → fire predictive SMS.
+  discretionaryMTD: number      // month-to-date discretionary spend
+  daysElapsed: number           // days into the current month, incl today
+  daysInMonth: number
+  monthlyAvailable: number      // income - bills - goal carve-out - buffer
+  velocity: number              // discretionaryMTD / daysElapsed
+  projectedDiscretionary: number
+  isOnPaceToOverspend: boolean
+  predictedRunoutDate: string | null // ISO YYYY-MM-DD when V × X exceeds monthlyAvailable
 }
 
 async function getUserMetrics(user: Record<string, unknown>): Promise<UserMetrics> {
@@ -332,6 +377,26 @@ async function getUserMetrics(user: Record<string, unknown>): Promise<UserMetric
     const overBy = Math.round(Math.max(0, spentYesterday - yesterdayLimit) * 100) / 100
     const top = yesterdaySpending.sort((a, b) => b.amount - a.amount)[0]
 
+    // ── Predictive velocity calculation ────────────────────────────────
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+    const daysElapsed = Math.max(1, now.getDate())
+    const discretionaryMTD = Math.max(0, totalSpent - fixedBills)
+    const velocity = discretionaryMTD / daysElapsed
+    const projectedDiscretionary = velocity * daysInMonth
+    const monthlyAvailable = sts.monthlyAvailable
+    const isOnPaceToOverspend =
+      monthlyAvailable > 0 && projectedDiscretionary > monthlyAvailable && velocity > 0
+
+    // Predicted run-out date: solve V × X = monthlyAvailable → X days from
+    // start of month. If X < daysElapsed they're already past it; cap at
+    // daysInMonth so the string never claims "Dec 35".
+    let predictedRunoutDate: string | null = null
+    if (isOnPaceToOverspend) {
+      const xDays = Math.min(daysInMonth, Math.max(daysElapsed + 1, Math.ceil(monthlyAvailable / velocity)))
+      const runoutD = new Date(now.getFullYear(), now.getMonth(), xDays)
+      predictedRunoutDate = runoutD.toISOString().split("T")[0]
+    }
+
     return {
       dailySafeToSpend: sts.dailySafeToSpend,
       spentYesterday: Math.round(spentYesterday * 100) / 100,
@@ -340,6 +405,14 @@ async function getUserMetrics(user: Record<string, unknown>): Promise<UserMetric
       overBy,
       escrowedBills: sts.escrowedBills,
       escrowTotal: sts.escrowTotal,
+      discretionaryMTD: Math.round(discretionaryMTD * 100) / 100,
+      daysElapsed,
+      daysInMonth,
+      monthlyAvailable: Math.round(monthlyAvailable * 100) / 100,
+      velocity: Math.round(velocity * 100) / 100,
+      projectedDiscretionary: Math.round(projectedDiscretionary * 100) / 100,
+      isOnPaceToOverspend,
+      predictedRunoutDate,
     }
   }
 
@@ -376,7 +449,7 @@ async function getUserMetrics(user: Record<string, unknown>): Promise<UserMetric
       vaultMetrics,
       upcomingBills,
     })
-    return { dailySafeToSpend: sts.dailySafeToSpend, spentYesterday: 0, topSpend: null, wasOverYesterday: false, overBy: 0, escrowedBills: sts.escrowedBills, escrowTotal: sts.escrowTotal }
+    return emptyPredictiveMetrics(sts.dailySafeToSpend, sts.escrowedBills, sts.escrowTotal, sts.monthlyAvailable, now)
   }
 
   // ── Profile-only path ──────────────────────────────────────────────
@@ -393,7 +466,55 @@ async function getUserMetrics(user: Record<string, unknown>): Promise<UserMetric
     accounts: [],
     upcomingBills,
   })
-  return { dailySafeToSpend: sts.dailySafeToSpend, spentYesterday: 0, topSpend: null, wasOverYesterday: false, overBy: 0, escrowedBills: sts.escrowedBills, escrowTotal: sts.escrowTotal }
+  return emptyPredictiveMetrics(sts.dailySafeToSpend, sts.escrowedBills, sts.escrowTotal, sts.monthlyAvailable, now)
+}
+
+// Default metrics for users we can't measure (no Plaid + no vault). Predictive
+// engine treats them as not-on-pace because we have no spending signal at all.
+function emptyPredictiveMetrics(
+  dailySafeToSpend: number,
+  escrowedBills: { name: string; amount: number; dueDate: string }[],
+  escrowTotal: number,
+  monthlyAvailable: number,
+  now: Date
+): UserMetrics {
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+  return {
+    dailySafeToSpend,
+    spentYesterday: 0,
+    topSpend: null,
+    wasOverYesterday: false,
+    overBy: 0,
+    escrowedBills,
+    escrowTotal,
+    discretionaryMTD: 0,
+    daysElapsed: Math.max(1, now.getDate()),
+    daysInMonth,
+    monthlyAvailable: Math.round(monthlyAvailable * 100) / 100,
+    velocity: 0,
+    projectedDiscretionary: 0,
+    isOnPaceToOverspend: false,
+    predictedRunoutDate: null,
+  }
+}
+
+// ── Generate predictive nudge ─────────────────────────────────────────
+// Triggered when projected end-of-month discretionary exceeds the user's
+// monthly_available. Uses the supportive copy template from the spec.
+function generatePredictiveNudge(params: {
+  name: string
+  predictedRunoutIso: string
+  primaryGoalName: string | null
+}): string {
+  const runoutDate = new Date(params.predictedRunoutIso).toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+  })
+  const goalClause = params.primaryGoalName
+    ? ` to protect your ${params.primaryGoalName} goal`
+    : ""
+  const message = `Hey ${params.name}, Aurora here. At your current spending pace this week, your Safe-to-Spend limit will hit $0 by ${runoutDate}. Let's freeze non-essential spending for 48 hours${goalClause}!`
+  return message.slice(0, 320) // SMS multi-segment cap; ~2 segments worst case
 }
 
 // ── Generate overspending nudge ──────────────────────────────────────

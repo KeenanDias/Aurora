@@ -4,10 +4,32 @@ import { Configuration, CountryCode, PlaidApi, PlaidEnvironments } from "plaid"
 // load. Next.js's build-time page-data collection evaluates module
 // top-level code without env vars injected — `new PlaidApi(...)` would
 // otherwise crash the build with "Missing credentials."
+//
+// PLAID_ENV maps to the Plaid SDK's pre-baked URL list:
+//   sandbox     → https://sandbox.plaid.com
+//   development → https://development.plaid.com
+//   production  → https://production.plaid.com
+// Any other value falls back to sandbox + warns once.
 let _plaidClient: PlaidApi | null = null
+let _envWarned = false
 function getPlaidClient(): PlaidApi {
   if (_plaidClient) return _plaidClient
-  const plaidEnv = process.env.PLAID_ENV || "sandbox"
+  const rawEnv = (process.env.PLAID_ENV || "sandbox").toLowerCase()
+  const validEnvs = new Set(Object.keys(PlaidEnvironments))
+  let plaidEnv = rawEnv
+  if (!validEnvs.has(rawEnv)) {
+    if (!_envWarned) {
+      console.warn(
+        `[plaid] Unknown PLAID_ENV "${rawEnv}". Valid options: ${Array.from(validEnvs).join(", ")}. Falling back to sandbox.`
+      )
+      _envWarned = true
+    }
+    plaidEnv = "sandbox"
+  }
+  if (plaidEnv === "production") {
+    // Production deserves a startup signal so it's clear which environment is hot.
+    console.log("[plaid] Initialized against PRODUCTION endpoint")
+  }
   const configuration = new Configuration({
     basePath: PlaidEnvironments[plaidEnv],
     baseOptions: {

@@ -215,7 +215,13 @@ export async function POST(req: NextRequest) {
     period_end: parsed.periodEnd,
     total_income: parsed.totalIncome,
     total_spending: parsed.totalSpending,
+    // Raw "Total Money Out" — every debit, withdrawal, transfer out, fee.
+    // The computeSummaries() fallback chain in parse-statement.ts already
+    // handles the implicit calc (opening + income - closing) when the AI
+    // can't find an explicit total, so this is always populated.
+    total_outflow: parsed.totalOutflow,
     fixed_bills: parsed.fixedBills,
+    opening_balance: parsed.openingBalance,
     closing_balance: parsed.closingBalance,
     // Identity fields for future verification
     institution_name: parsed.identity.institutionName,

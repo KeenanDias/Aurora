@@ -23,8 +23,12 @@ export type ParsedStatement = {
   periodStart: string // ISO date
   periodEnd: string // ISO date
   totalIncome: number
-  totalSpending: number
+  totalSpending: number  // discretionary + fixed bills (excludes pure transfers)
+  totalOutflow: number   // RAW sum of every dollar that left the account —
+                         // bills, discretionary, fees, transfers out, payments.
+                         // Matches what a user reads off their paper statement.
   fixedBills: number
+  openingBalance: number | null
   closingBalance: number | null
   identity: StatementIdentity
   transactions: ParsedTransaction[]
@@ -71,7 +75,9 @@ async function aiParseTransactions(rawText: string): Promise<{
   transactions: ParsedTransaction[]
   periodStart: string
   periodEnd: string
+  openingBalance: number | null
   closingBalance: number | null
+  totalOutflow: number | null
   identity: StatementIdentity
 }> {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -118,11 +124,22 @@ Also extract these fields from the statement header/footer:
 - transitNumber: Canadian 5-digit branch/transit number (if present)
 - institutionNumber: Canadian 3-digit institution code (if present, e.g., "004" for TD, "003" for RBC)
 
+## Total Outflow extraction (CRITICAL)
+Extract the absolute sum of ALL negative cash movements during the statement period — debits, withdrawals, transfers out, cheque payments, bills, service fees, ATM withdrawals, e-transfers sent, point-of-sale debits, automatic payments. This represents the raw, un-categorized total of every dollar that LEFT the account.
+- This number should match the "Total Withdrawals" or "Total Debits" line that almost every bank statement prints in its summary section. Use that line directly if present.
+- If no explicit total is printed, sum the entire Withdrawals column.
+- Express as a positive number (e.g., 1240.50 — NOT -1240.50).
+- Include EVERY outflow, even if it's a transfer to another own account. Do NOT filter "internal transfers."
+
+Also try to extract the opening balance (the balance at the start of the period) if printed.
+
 Return JSON:
 {
   "periodStart": "YYYY-MM-DD",
   "periodEnd": "YYYY-MM-DD",
+  "openingBalance": 0.00,
   "closingBalance": 0.00,
+  "totalOutflow": 0.00,
   "institutionName": "...",
   "accountMask": "1234",
   "accountHolderName": "...",
@@ -133,7 +150,7 @@ Return JSON:
   ]
 }
 
-Extract the "Closing Balance" value from the statement as closingBalance. This is the final account balance shown at the end of the statement. Set any identity field to null if not found.`,
+Extract the "Closing Balance" value from the statement as closingBalance and the "Opening Balance" as openingBalance. Set any field to null if not found. totalOutflow should be 0 only if there were truly no outflows in the period.`,
       },
       {
         role: "user",
@@ -144,7 +161,17 @@ Extract the "Closing Balance" value from the statement as closingBalance. This i
 
   const content = response.choices[0].message.content
   const emptyIdentity: StatementIdentity = { institutionName: null, accountMask: null, accountHolderName: null, transitNumber: null, institutionNumber: null }
-  if (!content) return { transactions: [], periodStart: "", periodEnd: "", closingBalance: null, identity: emptyIdentity }
+  if (!content) {
+    return {
+      transactions: [],
+      periodStart: "",
+      periodEnd: "",
+      openingBalance: null,
+      closingBalance: null,
+      totalOutflow: null,
+      identity: emptyIdentity,
+    }
+  }
 
   const parsed = JSON.parse(content)
 
@@ -166,7 +193,12 @@ Extract the "Closing Balance" value from the statement as closingBalance. This i
     transactions,
     periodStart: parsed.periodStart ?? "",
     periodEnd: parsed.periodEnd ?? "",
+    openingBalance: typeof parsed.openingBalance === "number" ? parsed.openingBalance : null,
     closingBalance: typeof parsed.closingBalance === "number" ? parsed.closingBalance : null,
+    totalOutflow:
+      typeof parsed.totalOutflow === "number" && parsed.totalOutflow >= 0
+        ? Math.round(parsed.totalOutflow * 100) / 100
+        : null,
     identity: {
       institutionName: parsed.institutionName ?? null,
       accountMask: parsed.accountMask ?? null,
@@ -232,7 +264,9 @@ export async function parseStatement(pdfBuffer: Buffer): Promise<ParsedStatement
     periodEnd: now.toISOString().split("T")[0],
     totalIncome: 0,
     totalSpending: 0,
+    totalOutflow: 0,
     fixedBills: 0,
+    openingBalance: null,
     closingBalance: null,
     identity: { institutionName: null, accountMask: null, accountHolderName: null, transitNumber: null, institutionNumber: null },
     transactions: [],
@@ -261,21 +295,32 @@ function buildResult(transactions: ParsedTransaction[], text: string): ParsedSta
     periodEnd = now.toISOString().split("T")[0]
   }
 
-  // Extract closing balance from text
+  // Extract closing + opening balance from text
   const closingMatch = text.match(/closing\s*balance\s*\$?([\d,]+\.\d{2})/i)
   const closingBalance = closingMatch ? parseFloat(closingMatch[1].replace(/,/g, "")) : null
+  const openingMatch = text.match(/opening\s*balance\s*\$?([\d,]+\.\d{2})/i)
+  const openingBalance = openingMatch ? parseFloat(openingMatch[1].replace(/,/g, "")) : null
 
   // Extract identity from text via regex
   const identity = extractIdentityFromText(text)
 
-  return computeSummaries({ periodStart, periodEnd, transactions, closingBalance, identity })
+  return computeSummaries({
+    periodStart,
+    periodEnd,
+    transactions,
+    openingBalance,
+    closingBalance,
+    identity,
+  })
 }
 
 function buildResultFromAI(aiResult: {
   transactions: ParsedTransaction[]
   periodStart: string
   periodEnd: string
+  openingBalance: number | null
   closingBalance: number | null
+  totalOutflow: number | null
   identity: StatementIdentity
 }): ParsedStatement {
   let { periodStart, periodEnd } = aiResult
@@ -289,7 +334,15 @@ function buildResultFromAI(aiResult: {
     periodStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0]
     periodEnd = now.toISOString().split("T")[0]
   }
-  return computeSummaries({ periodStart, periodEnd, transactions: aiResult.transactions, closingBalance: aiResult.closingBalance, identity: aiResult.identity })
+  return computeSummaries({
+    periodStart,
+    periodEnd,
+    transactions: aiResult.transactions,
+    openingBalance: aiResult.openingBalance,
+    closingBalance: aiResult.closingBalance,
+    aiTotalOutflow: aiResult.totalOutflow,
+    identity: aiResult.identity,
+  })
 }
 
 // Canadian bank name patterns for regex-based identity extraction
@@ -356,24 +409,53 @@ function computeSummaries(data: {
   periodStart: string
   periodEnd: string
   transactions: ParsedTransaction[]
+  openingBalance: number | null
   closingBalance: number | null
+  // The AI-extracted raw outflow total. If null, we fall back to deriving it
+  // from transactions (sum of every positive amount, transfers included) or
+  // from balance arithmetic (opening - closing - income).
+  aiTotalOutflow?: number | null
   identity: StatementIdentity
 }): ParsedStatement {
   let totalIncome = 0
   let totalSpending = 0
   let fixedBills = 0
+  let transactionOutflowSum = 0 // EVERY positive amount, including transfers
 
   for (const tx of data.transactions) {
     if (tx.amount < 0 || tx.category === "INCOME") {
       // Money coming IN — count as income (including internal transfers into this account)
       totalIncome += Math.abs(tx.amount)
-    } else if (tx.amount > 0 && tx.category !== "INTERNAL_TRANSFER") {
-      // Money going OUT — count as spending, but skip internal transfers between own accounts
-      totalSpending += tx.amount
-      const { isFixed } = categorize(tx.description)
-      if (isFixed) fixedBills += tx.amount
+    } else if (tx.amount > 0) {
+      // Raw outflow includes transfers — this is the user-facing "money out" number
+      transactionOutflowSum += tx.amount
+      if (tx.category !== "INTERNAL_TRANSFER") {
+        // discretionary + fixed (excludes pure internal transfers)
+        totalSpending += tx.amount
+        const { isFixed } = categorize(tx.description)
+        if (isFixed) fixedBills += tx.amount
+      }
     }
-    // INTERNAL_TRANSFER outflows (positive amount) are skipped — just moving money between your own accounts
+  }
+
+  // Pick the best totalOutflow signal we have. Priority:
+  //   1. AI's explicit extracted total (often pulled straight from the
+  //      statement's printed "Total Debits" line — most accurate).
+  //   2. Sum of every positive transaction amount.
+  //   3. Balance arithmetic: opening - closing - income.
+  let totalOutflow: number
+  if (typeof data.aiTotalOutflow === "number" && data.aiTotalOutflow > 0) {
+    totalOutflow = data.aiTotalOutflow
+  } else if (transactionOutflowSum > 0) {
+    totalOutflow = transactionOutflowSum
+  } else if (
+    data.openingBalance != null &&
+    data.closingBalance != null
+  ) {
+    // opening + income - outflow = closing  →  outflow = opening + income - closing
+    totalOutflow = Math.max(0, data.openingBalance + totalIncome - data.closingBalance)
+  } else {
+    totalOutflow = 0
   }
 
   return {
@@ -381,7 +463,9 @@ function computeSummaries(data: {
     periodEnd: data.periodEnd,
     totalIncome: Math.round(totalIncome * 100) / 100,
     totalSpending: Math.round(totalSpending * 100) / 100,
+    totalOutflow: Math.round(totalOutflow * 100) / 100,
     fixedBills: Math.round(fixedBills * 100) / 100,
+    openingBalance: data.openingBalance,
     closingBalance: data.closingBalance,
     identity: data.identity,
     transactions: data.transactions,
