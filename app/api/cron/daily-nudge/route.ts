@@ -5,6 +5,7 @@ import { calculateSafeToSpend } from "@/lib/safe-to-spend"
 import type { AccountBalance, VaultMetrics, UpcomingBill } from "@/lib/safe-to-spend"
 import { sendSMS } from "@/lib/twilio"
 import OpenAI from "openai"
+import { aggregateVaultUploads } from "@/lib/vault-transactions"
 
 // Force this route to be dynamic — never prerendered. Next.js's page-data
 // collection step would otherwise try to evaluate the module at build
@@ -326,25 +327,12 @@ async function getUserMetrics(user: Record<string, unknown>): Promise<UserMetric
       .reduce((s, t) => s + Math.abs(t.amount), 0)
     const incomeUsed = Math.max(selfReported, observedIncome, totalSpent * 1.5)
 
+    // Aggregate all vault uploads (newest-first non-overlapping cover) so
+    // STS reality-checks against the user's full statement history, not
+    // just the most recent PDF.
     let vaultMetrics: VaultMetrics | null = null
-    const { data: vault } = await getSupabase()
-      .from("vault_uploads")
-      .select("total_income, total_spending, fixed_bills, closing_balance, period_start, period_end")
-      .eq("clerk_user_id", user.clerk_user_id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .single()
-
-    if (vault) {
-      vaultMetrics = {
-        totalIncome: vault.total_income,
-        totalSpending: vault.total_spending,
-        fixedBills: vault.fixed_bills,
-        closingBalance: vault.closing_balance ?? null,
-        periodStart: vault.period_start,
-        periodEnd: vault.period_end,
-      }
-    }
+    const vaultAgg = await aggregateVaultUploads(user.clerk_user_id as string)
+    if (vaultAgg.totals) vaultMetrics = vaultAgg.totals
 
     const sts = calculateSafeToSpend({
       monthlyIncome: incomeUsed,
@@ -417,24 +405,15 @@ async function getUserMetrics(user: Record<string, unknown>): Promise<UserMetric
   }
 
   // ── Vault-only path ────────────────────────────────────────────────
-  const { data: vault } = await getSupabase()
-    .from("vault_uploads")
-    .select("total_income, total_spending, fixed_bills, closing_balance, period_start, period_end")
-    .eq("clerk_user_id", user.clerk_user_id)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .single()
-
-  if (vault) {
-    const vaultMetrics: VaultMetrics = {
-      totalIncome: vault.total_income,
-      totalSpending: vault.total_spending,
-      fixedBills: vault.fixed_bills,
-      closingBalance: vault.closing_balance ?? null,
-      periodStart: vault.period_start,
-      periodEnd: vault.period_end,
-    }
-    const incomeUsed = Math.max((user.monthly_income as number) ?? 0, vaultMetrics.totalIncome)
+  // Aggregate across every uploaded statement. Income is normalized to a
+  // monthly rate using the canonical span so 3 months of statements stop
+  // tripling the perceived income.
+  const vaultAggOnly = await aggregateVaultUploads(user.clerk_user_id as string)
+  if (vaultAggOnly.totals) {
+    const vaultMetrics: VaultMetrics = vaultAggOnly.totals
+    const monthlyFactor = 30.44 / Math.max(1, vaultAggOnly.spanDays)
+    const monthlyVaultIncome = vaultMetrics.totalIncome * monthlyFactor
+    const incomeUsed = Math.max((user.monthly_income as number) ?? 0, monthlyVaultIncome)
     const sts = calculateSafeToSpend({
       monthlyIncome: incomeUsed,
       fixedBills: 0,

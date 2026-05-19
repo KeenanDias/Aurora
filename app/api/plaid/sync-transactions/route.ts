@@ -5,6 +5,7 @@ import { getSupabase } from "@/lib/supabase"
 import { calculateSafeToSpend } from "@/lib/safe-to-spend"
 import type { AccountBalance, VaultMetrics, UpcomingBill } from "@/lib/safe-to-spend"
 import { fetchActiveGoals } from "@/lib/enrolled-goals"
+import { aggregateVaultUploads } from "@/lib/vault-transactions"
 
 // Categories to ignore for spending — internal money movements, not real spending
 const IGNORED_SPENDING_CATEGORIES = new Set([
@@ -73,39 +74,20 @@ export async function GET() {
 
   // ── Vault-only path: no bank linked but has uploaded statements ────
   if (!profile.plaid_access_token) {
-    const { data: latestVault } = await getSupabase()
-      .from("vault_uploads")
-      .select("total_income, total_spending, fixed_bills, closing_balance, period_start, period_end")
-      .eq("clerk_user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .single()
-
-    if (!latestVault) {
+    // Aggregate every statement the user has uploaded (greedy non-overlap,
+    // newest-first). This makes 3-month uploads behave like 3 months of
+    // data instead of silently using only the most recent file.
+    const agg = await aggregateVaultUploads(userId)
+    if (!agg.totals || agg.uploads.length === 0) {
       return NextResponse.json({ error: "No bank linked and no statements uploaded" }, { status: 400 })
     }
 
-    const vaultMetrics: VaultMetrics = {
-      totalIncome: latestVault.total_income,
-      totalSpending: latestVault.total_spending,
-      fixedBills: latestVault.fixed_bills,
-      closingBalance: latestVault.closing_balance ?? null,
-      periodStart: latestVault.period_start,
-      periodEnd: latestVault.period_end,
-    }
+    const vaultMetrics: VaultMetrics = agg.totals
 
-    // Normalize vault totals to a per-month rate. A 33-day statement isn't
-    // monthly income — it's ~1.085 months. A 60-day statement is 2 months.
-    // Without this, multi-month statements doubled the perceived income and
-    // STS ballooned.
-    const periodDays = Math.max(
-      1,
-      Math.round(
-        (new Date(vaultMetrics.periodEnd).getTime() -
-          new Date(vaultMetrics.periodStart).getTime()) /
-          (1000 * 60 * 60 * 24)
-      )
-    )
+    // Normalize the aggregated totals to a per-month rate using the full
+    // canonical span. 3 stitched-together 30-day statements = ~90 days,
+    // so total income / (90/30.44) ≈ ~one month's income.
+    const periodDays = agg.spanDays
     const monthlyFactor = 30.44 / periodDays
     const monthlyVaultIncome = vaultMetrics.totalIncome * monthlyFactor
 
@@ -146,6 +128,41 @@ export async function GET() {
       upcomingBills,
     })
 
+    // ── Category breakdown across ALL uploaded statements (canonical set).
+    //    Mirrors the Plaid branch so the Categories tab is populated even
+    //    when no bank is linked (beta path without Plaid prod). Filters out
+    //    the same internal-movement categories used by STS math so the
+    //    donut totals reconcile with `spentThisMonth`.
+    const spendingByCategory: Record<string, number> = {}
+    const transactionsByCategory: Record<
+      string,
+      { name: string; amount: number; date: string }[]
+    > = {}
+    const IGNORED_VAULT_CATS = new Set([
+      "TRANSFER_IN",
+      "TRANSFER_OUT",
+      "TRANSFER",
+      "INTERNAL_TRANSFER",
+      "CREDIT_CARD",
+      "LOAN_PAYMENTS",
+      "INCOME",
+    ])
+    for (const t of agg.transactions) {
+      if (t.amount <= 0) continue
+      if (IGNORED_VAULT_CATS.has(t.category)) continue
+      const cat = t.category || "OTHER"
+      spendingByCategory[cat] = (spendingByCategory[cat] ?? 0) + t.amount
+      if (!transactionsByCategory[cat]) transactionsByCategory[cat] = []
+      transactionsByCategory[cat].push({
+        name: t.description,
+        amount: t.amount,
+        date: t.isoDate,
+      })
+    }
+    for (const cat of Object.keys(transactionsByCategory)) {
+      transactionsByCategory[cat].sort((a, b) => (a.date < b.date ? 1 : -1))
+    }
+
     return NextResponse.json({
       safeToSpend,
       income: {
@@ -158,7 +175,8 @@ export async function GET() {
       totalBalance: 0,
       spentThisMonth: Math.round(vaultMetrics.totalSpending * 100) / 100,
       fixedBills: Math.round(vaultMetrics.fixedBills * 100) / 100,
-      spendingByCategory: {},
+      spendingByCategory,
+      transactionsByCategory,
       recentTransactions: [],
       source: "vault",
     })
@@ -292,25 +310,13 @@ export async function GET() {
     0
   )
 
-  // Fetch latest vault upload for this user (if any) to merge manual statement data
+  // Aggregate ALL vault uploads (canonical non-overlapping set) so the
+  // STS math can use the user's full statement history as a reality
+  // check against Plaid — not just whichever PDF they uploaded last.
   let vaultMetrics: VaultMetrics | null = null
-  const { data: latestVault } = await getSupabase()
-    .from("vault_uploads")
-    .select("total_income, total_spending, fixed_bills, closing_balance, period_start, period_end")
-    .eq("clerk_user_id", userId)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .single()
-
-  if (latestVault) {
-    vaultMetrics = {
-      totalIncome: latestVault.total_income,
-      totalSpending: latestVault.total_spending,
-      fixedBills: latestVault.fixed_bills,
-      closingBalance: latestVault.closing_balance ?? null,
-      periodStart: latestVault.period_start,
-      periodEnd: latestVault.period_end,
-    }
+  const vaultAgg = await aggregateVaultUploads(userId)
+  if (vaultAgg.totals) {
+    vaultMetrics = vaultAgg.totals
   }
 
   // Calculate Safe-to-Spend with account data for liquidity

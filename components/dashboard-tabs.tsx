@@ -1532,11 +1532,17 @@ function CategoriesTab({
       <div className="glass p-10 text-center">
         <PieIcon className="w-10 h-10 mx-auto text-muted-foreground/40 mb-3" />
         <p className="text-sm text-muted-foreground">
-          Link your bank or upload a statement to see your spending breakdown.
+          Upload a bank statement to your Vault to see your spending breakdown.
+          Live bank sync is coming after Plaid production approval.
         </p>
       </div>
     )
   }
+
+  // Vault-only mode: bank isn't linked but we have an uploaded statement.
+  // Label the source so the user knows the numbers reflect their PDF,
+  // not a live feed.
+  const vaultOnly = !bankLinked && hasVaultData
 
   return (
     <div className="grid lg:grid-cols-[0.9fr_1.1fr] gap-6">
@@ -1544,10 +1550,19 @@ function CategoriesTab({
       <div className="glass p-6 sm:p-8">
         <div className="flex items-center gap-2 mb-2">
           <PieIcon className="w-4 h-4 text-aurora-teal" />
-          <h3 className="text-sm font-semibold text-foreground">This month at a glance</h3>
+          <h3 className="text-sm font-semibold text-foreground">
+            {vaultOnly ? "Statement breakdown" : "This month at a glance"}
+          </h3>
+          {vaultOnly && (
+            <span className="ml-auto text-[10px] uppercase tracking-wider text-amber-400/90 font-semibold px-2 py-0.5 rounded-md bg-amber-500/10 border border-amber-500/30">
+              From uploaded statement
+            </span>
+          )}
         </div>
         <p className="text-xs text-muted-foreground mb-4">
-          Spending breakdown with your daily limit at the center — your discipline pivot.
+          {vaultOnly
+            ? "Spending categories pulled from your most recent PDF upload."
+            : "Spending breakdown with your daily limit at the center — your discipline pivot."}
         </p>
         <div className="relative w-full h-72">
           {/* Custom hover tooltip — pinned above the donut so it never
@@ -1626,7 +1641,7 @@ function CategoriesTab({
               ${Math.round(sts)}
             </p>
             <p className="text-[10px] text-muted-foreground mt-1">
-              ${total.toFixed(0)} spent so far
+              ${total.toFixed(0)} {vaultOnly ? "on your statement" : "spent so far"}
             </p>
           </div>
         </div>
@@ -1636,7 +1651,9 @@ function CategoriesTab({
       <div className="glass p-2">
         {data.length === 0 ? (
           <p className="text-sm text-muted-foreground/80 text-center py-12">
-            No spending recorded this month yet.
+            {vaultOnly
+              ? "No discretionary spending found on your uploaded statement."
+              : "No spending recorded this month yet."}
           </p>
         ) : (
           <ul className="divide-y divide-border/40">

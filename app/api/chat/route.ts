@@ -6,6 +6,7 @@ import { plaidClient } from "@/lib/plaid"
 import { calculateSafeToSpend } from "@/lib/safe-to-spend"
 import { fetchActiveGoals } from "@/lib/enrolled-goals"
 import type { AccountBalance } from "@/lib/safe-to-spend"
+import { aggregateVaultUploads } from "@/lib/vault-transactions"
 
 // Lazy-init so the client is constructed at request time, not at module
 // load. Fixes Cloudflare/Vercel build-time page-data collection failing
@@ -808,27 +809,35 @@ The user is over budget by $${Math.abs(metrics.remainingBudget)} this month. APP
 CRITICAL: When the user asks about Safe-to-Spend, spending, or budget — ALWAYS use these live numbers. NEVER recalculate from the self-reported income. These numbers already account for observed income, fixed bills, goals, buffer, escrow, and actual spending.${metrics.escrowedBills.length > 0 ? "\n\nESCROW NOTE: The daily limit is lower because I'm protecting money for an upcoming bill. Explain this proactively if the user asks why their limit changed." : ""}${toneDirective}`
       }
     } else {
-      // Check for vault statement data
-      const { data: latestVault } = await getSupabase()
-        .from("vault_uploads")
-        .select("total_income, total_spending, fixed_bills, closing_balance, period_start, period_end, filename")
-        .eq("clerk_user_id", userId)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .single()
-
-      if (latestVault) {
-        bankStatus = "No bank linked, but user has uploaded a bank statement. Use the statement data below for financial coaching."
-        const balanceInfo = latestVault.closing_balance != null
-          ? `\n- **Account closing balance:** $${latestVault.closing_balance}`
+      // Aggregate every uploaded statement (greedy non-overlap, newest-first)
+      // so the chat reasons about the user's full statement history, not
+      // whichever PDF they uploaded last.
+      const vaultAgg = await aggregateVaultUploads(userId)
+      if (vaultAgg.totals && vaultAgg.uploads.length > 0) {
+        const v = vaultAgg.totals
+        bankStatus = "No bank linked, but user has uploaded bank statement(s). Use the aggregated statement data below for financial coaching."
+        const balanceInfo = v.closingBalance != null
+          ? `\n- **Latest closing balance:** $${v.closingBalance}`
           : ""
-        metricsBlock = `\n\n## Statement Data (from uploaded statement: ${latestVault.filename})
-- **Statement period:** ${latestVault.period_start} to ${latestVault.period_end}
-- **Total income:** $${latestVault.total_income}
-- **Total spending:** $${latestVault.total_spending}
-- **Fixed bills:** $${latestVault.fixed_bills}${balanceInfo}
+        const fileList = vaultAgg.uploads
+          .map((u) => `${u.filename ?? "statement"} (${u.period_start} → ${u.period_end})`)
+          .join(", ")
+        // Normalize to a monthly rate so coaching advice doesn't treat a
+        // 90-day span as one month of income.
+        const monthlyFactor = 30.44 / Math.max(1, vaultAgg.spanDays)
+        const monthlyIncome = v.totalIncome * monthlyFactor
+        const monthlySpending = v.totalSpending * monthlyFactor
+        const monthlyFixed = v.fixedBills * monthlyFactor
+        metricsBlock = `\n\n## Statement Data (aggregated across ${vaultAgg.uploads.length} upload${vaultAgg.uploads.length === 1 ? "" : "s"}: ${fileList})
+- **Combined period:** ${v.periodStart} to ${v.periodEnd} (${vaultAgg.spanDays} days)
+- **Total income (raw):** $${v.totalIncome.toFixed(2)}
+- **Total spending (raw):** $${v.totalSpending.toFixed(2)}
+- **Total fixed bills (raw):** $${v.fixedBills.toFixed(2)}
+- **Monthly income (normalized):** $${monthlyIncome.toFixed(2)}
+- **Monthly spending (normalized):** $${monthlySpending.toFixed(2)}
+- **Monthly fixed bills (normalized):** $${monthlyFixed.toFixed(2)}${balanceInfo}
 
-Use this data to inform your Safe-to-Spend calculations and financial coaching. The closing balance represents how much is actually in this account at the end of the statement — use it as a reality check. If the user asks "how much can I spend," factor in the real balance, not just income minus expenses.
+Use these numbers to inform Safe-to-Spend calculations and coaching. Prefer the **monthly normalized** figures for "what can I spend each month" reasoning, and the **raw totals** for "what did I do across the statement period" reasoning. The latest closing balance is a reality check — if the user asks "how much can I spend," factor in the real balance, not just income minus expenses.
 
 This gives you real spending patterns — you don't need to ask about lifestyle spending categories that are already visible in the statement data. You can still ask about expenses NOT covered by the statement period.`
       } else {

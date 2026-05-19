@@ -2,6 +2,7 @@ import { getSupabase } from "@/lib/supabase"
 import { plaidClient } from "@/lib/plaid"
 import { calculateSafeToSpend, type EnrolledGoal } from "@/lib/safe-to-spend"
 import { fetchActiveGoals } from "@/lib/enrolled-goals"
+import { fetchLatestVaultTransactions } from "@/lib/vault-transactions"
 
 /**
  * Budget-Streak engine.
@@ -34,7 +35,7 @@ export type StreakResult = {
   todayLimit: number
   lastVerifiedDate: string | null
   daysChecked: number
-  source: "plaid" | "manual_only" | "none"
+  source: "plaid" | "vault" | "manual_only" | "none"
 }
 
 type SpendingDay = {
@@ -97,6 +98,7 @@ export async function computeBudgetStreak(userId: string): Promise<StreakResult>
 
   const perDay = new Map<string, number>()
   let plaidSourced = false
+  let vaultSourced = false
 
   if (profile.bank_linked && profile.plaid_access_token) {
     try {
@@ -126,6 +128,25 @@ export async function computeBudgetStreak(userId: string): Promise<StreakResult>
     }
   }
 
+  // ── Vault fallback. When Plaid isn't linked (beta path) we lean on the
+  //    most recent uploaded statement so the streak isn't permanently zero.
+  //    The parser already filters out deposits via positive `amount` and
+  //    we apply the same IGNORED_SPENDING category set so transfers don't
+  //    inflate the daily total.
+  if (!plaidSourced) {
+    const vaultTx = await fetchLatestVaultTransactions(userId)
+    for (const t of vaultTx) {
+      if (t.amount <= 0) continue
+      if (IGNORED_SPENDING.has(t.category)) continue
+      // Window: only include rows inside the lookback range so old multi-
+      // month statements don't run the walk back to the dawn of time.
+      const d = new Date(t.isoDate + "T00:00:00")
+      if (d < startWindow || d > now) continue
+      perDay.set(t.isoDate, (perDay.get(t.isoDate) ?? 0) + t.amount)
+    }
+    vaultSourced = vaultTx.length > 0
+  }
+
   // Manual transactions in the same window
   const { data: manual } = await supabase
     .from("manual_transactions")
@@ -139,7 +160,7 @@ export async function computeBudgetStreak(userId: string): Promise<StreakResult>
   }
 
   // If we have no signal at all, return an empty streak.
-  if (perDay.size === 0 && !plaidSourced) {
+  if (perDay.size === 0 && !plaidSourced && !vaultSourced) {
     return emptyResult({
       todayLimit: dailyLimitForDate(now),
       longest: profile.longest_streak ?? 0,
@@ -210,7 +231,7 @@ export async function computeBudgetStreak(userId: string): Promise<StreakResult>
     todayLimit: Math.round(todayLimit * 100) / 100,
     lastVerifiedDate,
     daysChecked: days.length,
-    source: plaidSourced ? "plaid" : "manual_only",
+    source: plaidSourced ? "plaid" : vaultSourced ? "vault" : "manual_only",
   }
 }
 

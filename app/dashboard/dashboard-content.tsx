@@ -1,11 +1,11 @@
 "use client"
 
-import { useCallback, useEffect, useState, useRef } from "react"
-import { Check, Unlink, Loader2 } from "lucide-react"
+import { useEffect, useState, useRef } from "react"
+import Link from "next/link"
+import { Check, Unlink, Loader2, FileText, Clock } from "lucide-react"
 import { DashboardMetrics } from "@/components/dashboard-metrics"
 import { DashboardTabs } from "@/components/dashboard-tabs"
 import { StreakIndicator } from "@/components/streak-indicator"
-import { PlaidLinkButton } from "@/components/plaid-link-button"
 import confetti from "canvas-confetti"
 
 export function DashboardContent({
@@ -114,12 +114,9 @@ export function DashboardContent({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const handlePlaidSuccess = useCallback(() => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const refresh = (window as any).__refreshDashboardMetrics
-    if (typeof refresh === "function") refresh()
-    setTimeout(() => window.location.reload(), 1500)
-  }, [])
+  // Plaid Link is gated during the beta — see the bank-connection card
+  // below. When production approval lands, restore PlaidLinkButton and
+  // its onSuccess handler that refreshes the dashboard metrics.
 
   return (
     <>
@@ -154,15 +151,39 @@ export function DashboardContent({
 
       {/* Bank connection card */}
       {!bankLinked ? (
-        <div className="glass p-8 bg-gradient-to-br from-aurora-emerald/[0.06] via-aurora-teal/[0.04] to-aurora-violet/[0.06]">
-          <h2 className="text-xl font-bold text-foreground mb-2">
-            Connect Your Bank
-          </h2>
-          <p className="text-muted-foreground mb-6 max-w-lg">
-            Link your bank account to unlock real-time Safe-to-Spend tracking,
-            spending insights, Financial Karma rewards, and personalized AI coaching.
+        <div className="glass p-8 bg-gradient-to-br from-amber-500/[0.06] via-aurora-teal/[0.04] to-aurora-violet/[0.06] !border-amber-500/30">
+          <div className="flex items-start gap-3 mb-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center shrink-0">
+              <Clock className="w-5 h-5 text-amber-400" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-wider text-amber-400 font-semibold mb-1">
+                Beta · Bank Linking Coming Soon
+              </p>
+              <h2 className="text-xl font-bold text-foreground leading-tight">
+                Live bank sync isn&apos;t enabled yet
+              </h2>
+            </div>
+          </div>
+          <p className="text-sm text-muted-foreground mb-5 max-w-2xl">
+            We&apos;re still finishing our Plaid production approval. In the
+            meantime, upload a recent PDF bank statement to your Vault — Aurora
+            will parse your real transactions, fixed bills, and balances so
+            every dashboard number (Safe-to-Spend, Categories, Streak) reflects
+            your actual spending.
           </p>
-          <PlaidLinkButton onSuccess={handlePlaidSuccess} />
+          <div className="flex flex-wrap items-center gap-3">
+            <Link
+              href="/dashboard/vault"
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-aurora-emerald via-aurora-teal to-aurora-violet text-white text-sm font-semibold shadow-lg shadow-aurora-teal/30 hover:shadow-xl hover:shadow-aurora-teal/40 transition-all"
+            >
+              <FileText className="w-4 h-4" />
+              Upload a Bank Statement
+            </Link>
+            <span className="text-xs text-muted-foreground/80">
+              Encrypted in your private vault · PDF only · We never store credentials
+            </span>
+          </div>
         </div>
       ) : (
         <BankConnectedCard />
