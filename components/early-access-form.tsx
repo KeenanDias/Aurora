@@ -27,16 +27,41 @@ export function EarlyAccessForm({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, email, source }),
       })
-      const data = await res.json()
+
+      // Parse body defensively — a 5xx from Next.js/Render may return HTML
+      // (not JSON), and JSON.parse would throw and fall into the catch as
+      // "Network error" even though the request succeeded. Read as text
+      // first, try JSON, and fall back to a useful message either way.
+      const text = await res.text()
+      let data: { ok?: boolean; message?: string; error?: string } = {}
+      try { data = text ? JSON.parse(text) : {} } catch { /* non-JSON response */ }
+
       if (res.ok) {
-        setResult({ ok: true, message: data.message })
+        setResult({
+          ok: true,
+          message: data.message ?? "Thanks! We'll be in touch shortly.",
+        })
         setName("")
         setEmail("")
       } else {
-        setResult({ ok: false, message: data.error ?? "Something went wrong." })
+        // Surface the server-side reason so we don't mask config errors as
+        // "Network error". Falls back to a manual contact prompt if the
+        // backend can't take the request right now.
+        setResult({
+          ok: false,
+          message:
+            data.error ??
+            `Sign-ups are closed right now. Please create an account to access the beta or email us at diaskeenana@gmail.com for further assistance.`,
+        })
       }
     } catch {
-      setResult({ ok: false, message: "Network error. Please try again." })
+      // Real network failure (offline, DNS, CORS preflight). Same graceful
+      // fallback — give them a path that doesn't require the API.
+      setResult({
+        ok: false,
+        message:
+          "Couldn't reach our server. Email diaskeenana@gmail.com with your name and we'll add you manually.",
+      })
     } finally {
       setSubmitting(false)
     }
@@ -83,7 +108,10 @@ export function EarlyAccessForm({
         {submitting ? "Submitting..." : "Request Early Access"}
       </button>
       {result && !result.ok && (
-        <p className="text-xs text-red-400">{result.message}</p>
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/[0.06] p-3 flex items-start gap-2.5">
+          <span className="text-amber-400 text-base leading-none mt-0.5">⚠</span>
+          <p className="text-xs text-amber-200/90 leading-relaxed">{result.message}</p>
+        </div>
       )}
     </form>
   )
