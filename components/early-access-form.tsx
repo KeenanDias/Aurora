@@ -51,7 +51,7 @@ export function EarlyAccessForm({
           ok: false,
           message:
             data.error ??
-            `Sign-ups are closed right now. Please create an account to access the beta or email us at diaskeenana@gmail.com for further assistance.`,
+            `Sign ups are closed right now. Please create an account to access the beta or email us at diaskeenana@gmail.com for further assistance.`,
         })
       }
     } catch {
@@ -108,9 +108,13 @@ export function EarlyAccessForm({
         {submitting ? "Submitting..." : "Request Early Access"}
       </button>
       {result && !result.ok && (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/[0.06] p-3 flex items-start gap-2.5">
-          <span className="text-amber-400 text-base leading-none mt-0.5">⚠</span>
-          <p className="text-xs text-amber-200/90 leading-relaxed">{result.message}</p>
+        <div className="rounded-xl border-2 border-amber-500/70 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-500/[0.08] shadow-lg shadow-amber-500/10 p-4 flex items-start gap-3">
+          <div className="w-7 h-7 rounded-lg bg-amber-500 dark:bg-amber-500/30 flex items-center justify-center shrink-0">
+            <span className="text-white dark:text-amber-300 text-sm font-bold leading-none">!</span>
+          </div>
+          <p className="text-sm font-medium text-amber-900 dark:text-amber-200 leading-relaxed">
+            {result.message}
+          </p>
         </div>
       )}
     </form>
